@@ -1,0 +1,63 @@
+name: Build ConquerLoader 5065 (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/redux-5065-local-profile
+    paths:
+      - 'ConquerLoader/**'
+      - '.github/workflows/build-conquerloader-5065.yml'
+      - 'profiles/redux-5065.local.json'
+  pull_request:
+    paths:
+      - 'ConquerLoader/**'
+      - '.github/workflows/build-conquerloader-5065.yml'
+      - 'profiles/redux-5065.local.json'
+
+jobs:
+  build-loader:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install MSBuild
+        uses: microsoft/setup-msbuild@v2
+      - name: Install NuGet
+        uses: NuGet/setup-nuget@v2
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          nuget restore 'ConquerLoader/ConquerLoader.sln' -PackagesDirectory 'ConquerLoader/packages' -NonInteractive -Verbosity normal
+          if ($LASTEXITCODE -ne 0) { throw 'NuGet restore failed' }
+      - name: Compile launcher (Release x86, .NET Framework 4.6.2)
+        shell: pwsh
+        run: |
+          msbuild 'ConquerLoader/ConquerLoader/ConquerLoader.csproj' /t:Rebuild /p:Configuration=Release /p:Platform=AnyCPU /m /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'ConquerLoader compilation failed' }
+      - name: Assemble local Redux 5065 bundle
+        shell: pwsh
+        run: |
+          $source = 'ConquerLoader/Release'
+          $dist = 'dist/ConquerLoader-Redux-5065'
+          if (-not (Test-Path "$source/ConquerLoader.exe" -PathType Leaf)) { throw 'Missing ConquerLoader.exe' }
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          Copy-Item "$source/*" $dist -Recurse -Force
+          Copy-Item 'profiles/redux-5065.local.json' "$dist/config.json" -Force
+          @'
+          Configuracion para Redux + cliente Conquer Online 5065.
+          1. Copia el contenido completo junto a Conquer.exe en una carpeta de prueba.
+          2. config.json apunta a 127.0.0.1:9958 (login) y :5816 (juego).
+          3. Si Redux usa otra IP/puertos, configura con tools/Configure-Redux5065.ps1.
+          4. Usa Windows Defender y prueba el cliente en un entorno aislado.
+          Compilado en GitHub Actions. No incluye el cliente ni prueba la seguridad de las DLL embebidas.
+          '@ | Set-Content -LiteralPath "$dist/LEEME-Redux5065.txt" -Encoding UTF8
+      - name: Upload compiled launcher (ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConquerLoader-Redux-5065
+          path: dist/ConquerLoader-Redux-5065/
+          if-no-files-found: error
+          retention-days: 14

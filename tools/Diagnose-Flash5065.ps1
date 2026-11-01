@@ -72,7 +72,8 @@ $ocx = Join-Path $folder 'Flash.ocx'
 $hook = Join-Path $folder 'CLHook.dll'
 foreach ($path in @($exe, $ocx, $hook)) {
     $name = Split-Path $path -Leaf
-    Info $name (if (Test-Path -LiteralPath $path -PathType Leaf) { 'Presente' } else { 'FALTA' })
+    $present = Test-Path -LiteralPath $path -PathType Leaf
+    Info $name $(if ($present) { 'Presente' } else { 'FALTA' })
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         Info "$name CPU" (Read-ImageMachine $path)
         if ($name -eq 'Flash.ocx') {

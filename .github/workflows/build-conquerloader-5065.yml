@@ -52,6 +52,15 @@ jobs:
         shell: pwsh
         run: |
           ./tests/Test-Redux5065.ps1
+      - name: Exercise read-only Flash diagnostics on a synthetic client
+        shell: pwsh
+        run: |
+          $folder = Join-Path $env:RUNNER_TEMP 'test-flash5065'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          [IO.File]::WriteAllText((Join-Path $folder 'Conquer.exe'), 'Synthetic client only')
+          [IO.File]::WriteAllText((Join-Path $folder 'Flash.ocx'), 'Synthetic placeholder only')
+          Copy-Item 'profiles/redux-5065.local.json' (Join-Path $folder 'config.json')
+          ./tools/Diagnose-Flash5065.ps1 -ClientDirectory $folder
       - name: Compile native Win32 CLHook with Flash fix
         shell: pwsh
         run: |

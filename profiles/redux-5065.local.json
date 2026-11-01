@@ -1,0 +1,56 @@
+{
+  "Servers": [
+    {
+      "ServerName": "Redux_Beta",
+      "ServerVersion": 5065,
+      "LoginHost": "127.0.0.1",
+      "GameHost": "127.0.0.1",
+      "LoginPort": 9958,
+      "GamePort": 5816,
+      "ExecutableName": "Conquer.exe",
+      "EnableHostName": false,
+      "UseDirectX9": false,
+      "Hostname": "",
+      "ServerNameMemoryAddress": "0",
+      "ServerIcon": "",
+      "Group": {
+        "GroupName": "",
+        "GroupIcon": "",
+        "Servers": []
+      }
+    }
+  ],
+  "DefaultServer": {
+    "ServerName": "Redux_Beta",
+    "ServerVersion": 5065,
+    "LoginHost": "127.0.0.1",
+    "GameHost": "127.0.0.1",
+    "LoginPort": 9958,
+    "GamePort": 5816,
+    "ExecutableName": "Conquer.exe",
+    "EnableHostName": false,
+    "UseDirectX9": false,
+    "Hostname": "",
+    "ServerNameMemoryAddress": "0",
+    "ServerIcon": "",
+    "Group": {
+      "GroupName": "",
+      "GroupIcon": "",
+      "Servers": []
+    }
+  },
+  "DebugMode": false,
+  "CloseOnFinish": false,
+  "HighResolution": false,
+  "FHDResolution": false,
+  "FullScreen": false,
+  "ServernameChange": false,
+  "DisableAutoFixFlash": true,
+  "Title": "Redux 5065 local",
+  "Description": "Conquer Online 5065 - Redux local",
+  "Lang": "es",
+  "LicenseKey": "",
+  "DisableScreenChanges": true,
+  "UseCustomDLLs": false,
+  "FPSUnlock": false
+}

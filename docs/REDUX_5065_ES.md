@@ -75,3 +75,31 @@ Desde PowerShell:
     .\tests\Test-Redux5065.ps1
 
 Esta prueba utiliza una carpeta temporal con archivos ficticios para los nombres del cliente y del loader, sin ejecutarlos.
+
+
+## Diagnóstico real del Conquer.exe 5065 (24/08/2008)
+
+Análisis estático del ejecutable aportado por el usuario, SHA-256:
+`97ccc3276d46d46bb91ad62e758d1fb622c036f6224eed5ea7c121a80e550a89`.
+PE32/i386, contiene referencias a `CShockwaveFlash`,
+`DlgLoginFlash.cpp` y `Flash.ocx`, ejecuta la verificación ActiveX.
+En la función cercana a 0x0047A0B1 hay una comparación con 0x00060000
+(versión mínima 6.0); si falla, en la ruta próxima a 0x0047A2A1,
+construye un comando de `regsvr32 /s Flash.ocx`.
+No es solo el launcher Play.exe; el cliente usa COM Flash realmente.
+
+**Corrección de ruteo de ConquerLoader:** antes `useDecryptedServerDat`
+era true siempre y se intentaba `COFlashFixer.dll` para la versión 5065,
+aunque esta DLL solo se generaba para >=5717. Ahora 5065 usa `CLHook.dll`
+de código nativo, y el perfil habilita `DisableAutoFixFlash=false`.
+El workflow recompila el CLHook con CFlashFix desde el proyecto C++ en vez de
+confiar en la DLL legacy de recurso antigua.
+
+**Límite:** incluso con hook, si el ActiveX Flash no está registrado en el
+sistema, la creación COM puede fallar antes de que el hook de `LoadLibraryExW`
+intercepte nada. No se ha verificado el inicio real en Windows con el OCX del
+usuario. Evitar registrar Flash antiguo en Windows principal. Usar entorno
+virtual y evaluar un reemplazo de login sin Flash a largo plazo.
+
+No modificar `Conquer.exe` en disco; el parche solo afecta el flujo
+ del launcher. Mantener rutas y hashes separados para pruebas.

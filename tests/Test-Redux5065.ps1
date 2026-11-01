@@ -19,6 +19,7 @@ try {
 
     $sample = Get-Content -LiteralPath $template -Raw | ConvertFrom-Json
     Assert ($sample.Servers.Count -eq 1) 'La plantilla tiene que contener un solo servidor.'
+    Assert (-not $sample.DisableAutoFixFlash) 'El perfil 5065 debe habilitar el hook Flash local.'
     Assert ($sample.DefaultServer.ServerVersion -eq 5065) 'Version incorrecta en plantilla.'
     Assert ($sample.Servers[0].LoginPort -eq 9958) 'Puerto login incorrecto en plantilla.'
     Assert ($sample.Servers[0].GamePort -eq 5816) 'Puerto juego incorrecto en plantilla.'
@@ -31,6 +32,7 @@ try {
     $configPath = Join-Path $tempDir 'config.json'
     $current = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     Assert ($current.Servers.Count -eq 1) 'La configuracion generada tiene varios servidores.'
+    Assert (-not $current.DisableAutoFixFlash) 'El configurador deshabilito el hook Flash.'
     Assert ($current.Servers[0].ServerVersion -eq 5065) 'La configuracion no es 5065.'
     Assert ($current.Servers[0].LoginHost -eq '127.0.0.1') 'IP de login local incorrecta.'
     Assert ($current.DefaultServer.LoginPort -eq 9958) 'Puerto de login incorrecto.'

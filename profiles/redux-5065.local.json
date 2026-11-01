@@ -45,7 +45,7 @@
   "FHDResolution": false,
   "FullScreen": false,
   "ServernameChange": false,
-  "DisableAutoFixFlash": true,
+  "DisableAutoFixFlash": false,
   "Title": "Redux 5065 local",
   "Description": "Conquer Online 5065 - Redux local",
   "Lang": "es",

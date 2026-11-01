@@ -417,7 +417,8 @@ namespace ConquerLoader.Forms.WPF
                         + Environment.NewLine + "HOSTNAME=" + SelectedServer.Hostname
                         + Environment.NewLine + "SERVER_VERSION=" + SelectedServer.ServerVersion
                         + Environment.NewLine + "SERVERNAME_MEMORYADDRESS=" + SelectedServer.ServerNameMemoryAddress
-                        + Environment.NewLine + "DISABLE_AUTOFIX_FLASH=" + (LoaderConfig.DisableAutoFixFlash ? "1" : "0"));
+                        + Environment.NewLine + "DISABLE_AUTOFIX_FLASH=" + (LoaderConfig.DisableAutoFixFlash ? "1" : "0")
+                        + Environment.NewLine + "FLASHLESS_NATIVE_LOGIN=" + (SelectedServer.ServerVersion == 5065 ? "1" : "0"));
 
                     Core.LogWritter.Write("Created the Hook Configuration");
 

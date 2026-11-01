@@ -80,11 +80,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="hook.h" />
+    <ClInclude Include="Flashless5065.h" />
     <ClInclude Include="LegacyCipher.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Flashless5065.cpp" />
     <ClCompile Include="CFlashFix.cpp" />
     <ClCompile Include="CFlashFix.h" />
     <ClCompile Include="CLHook.cpp" />

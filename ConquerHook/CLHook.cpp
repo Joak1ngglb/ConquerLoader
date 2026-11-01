@@ -16,6 +16,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include "CFlashFix.h"
+#include "Flashless5065.h"
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "user32.lib")
 
@@ -236,8 +237,19 @@ void csv3_init(HMODULE hModule)
 	//std::string s = std::to_string(ClientVersion);
 	//MessageBoxA(NULL, s.c_str(), "INFO TEST", MB_OK);
 
-	// Fix Flash for old clients
-	if (ClientVersion <= 6186) {
+	// Flash-less mode uses Win32 credential fields + original client network auth.
+    // Only attempt against the exact Conquer.exe build given by the user.
+    bool flashless = ClientVersion == 5065 &&
+        GetPrivateProfileIntA(HeaderConfig, "FLASHLESS_NATIVE_LOGIN", 0, szConfig) == 1;
+    if (flashless) {
+        if (!EnableFlashless5065(hModule)) {
+            MessageBoxA(NULL, "El cliente no coincide con Conquer.exe 5065 compatible. No se modifico el juego.",
+                "Redux - login sin Flash", MB_OK | MB_ICONERROR);
+        }
+    }
+
+    // Keep legacy hook for other versions; do not load Flash for native 5065.
+    if (!flashless && ClientVersion <= 6186) {
 		if (!DisableAutoFixFlash) {
 			CFlashFix flash;
 			flash.Hook();

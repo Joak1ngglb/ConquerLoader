@@ -124,3 +124,39 @@ solo intercepta una llamada a `LoadLibraryExW`; si COM no está registrado,
 el hook no resuelve la activación de ese control. El uso seguro de un
 ActiveX de 2007 en el host no es recomendable. El diagnóstico distingue
 esto de una inyección CLHook fallida.
+
+
+## Modo experimental de login nativo sin Flash (5065 exacto)
+
+A partir del commit de implementación del cliente, la rama incorpora
+`ConquerHook/Flashless5065.cpp`. El launcher genera automáticamente
+`FLASHLESS_NATIVE_LOGIN=1` en `CLHook.ini` para la versión 5065.
+
+- Intercepta *solo* el cliente PE32 de 24-08-2008 que coincide con el
+  timestamp, tamaño PE y bytes originales verificados.
+- Evita la comprobación antigua de versión de Flash, e intenta capturar
+  el objeto de login nativo del cliente.
+- Presenta campos Windows de usuario y contraseña (contraseña ocultada).
+  Los datos permanecen en RAM; no se guardan en ningún archivo ni servidor
+  externo al cliente.
+- Al pulsar Entrar, la rutina original del cliente intenta autenticar
+  contra Redux, conservando el protocolo de red del juego.
+- No instala, registra ni carga `Flash.ocx` para el login nativo.
+
+**Estado: EXPERIMENTAL.** Sólo se ha compilado el código y se ha efectuado
+análisis estático del binario. El cliente original todavía contiene rutas
+de ActiveX y su inicialización podría fallar antes de establecer el login
+nativo; no está probado que se pueda jugar o iniciar sesión.
+
+Prueba: hacé una copia de la carpeta original, copiá encima el *paquete
+completo* de ConquerLoader de la rama y abrí `ConquerLoader.exe`.
+Debería aparecer una ventana adicional `Redux 5065 - Sin Adobe Flash`.
+Si muestra «Esperando el login interno», el cliente no alcanzó la
+inicialización esperada y requiere un cambio posterior en esa ruta.
+Si el juego se cierra, anotá el mensaje/log; no vuelvas a registrar Flash.
+
+**Rollback:** cerrá el cliente y recuperá la carpeta original respaldada.
+Si se deshabilita `FLASHLESS_NATIVE_LOGIN`, vuelve el comportamiento anterior.
+
+**Limitación de versión:** nunca aplicar a un Conquer.exe diferente.
+No modificar `Conquer.exe` en disco ni publicar sus archivos en Git.

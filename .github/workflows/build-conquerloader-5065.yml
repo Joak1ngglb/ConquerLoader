@@ -93,7 +93,9 @@ jobs:
           4. Este 5065 usa CLHook.dll compilado de ConquerHook/ (no COFlashFixer.dll).
           5. La correccion de Flash esta habilitada en config.json. NO registres OCX
              ni instales Flash antiguo en el sistema. Probar primero en entorno aislado.
-          6. Usa Windows Defender. Si aun hay error Flash revisa conquerloader.log.
+          6. Para 5065 el CLHook experimental intenta abrir una ventana
+             'Redux 5065 - Sin Adobe Flash'. No se ha probado el login real.
+          7. Usa Windows Defender. Si falla revisa conquerloader.log.
           Compilado en GitHub Actions. No incluye el cliente ni prueba la seguridad de las DLL embebidas.
           '@ | Set-Content -LiteralPath "$dist/LEEME-Redux5065.txt" -Encoding UTF8
       - name: Upload compiled launcher (ZIP)

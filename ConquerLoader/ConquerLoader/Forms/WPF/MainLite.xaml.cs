@@ -468,7 +468,14 @@ namespace ConquerLoader.Forms.WPF
             string pathToConquerExe = Path.Combine(WinForms.Application.StartupPath, SelectedServer.ExecutableName);
             string workingDir = Path.GetDirectoryName(pathToConquerExe);
             bool noUseDX8DX9 = true;
-            bool useDecryptedServerDat = true;
+            // 5065 uses the legacy CLHook and does NOT use the decrypted server.dat
+            // or the 5717+ COFlashFixer/COHook path. Keep these modes isolated.
+            bool useDecryptedServerDat =
+                SelectedServer.ServerVersion >= Constants.MinVersionCreateFlashFix &&
+                SelectedServer.ServerVersion <= Constants.MaxVersionUseRAWServerDat;
+            HookDLL = useDecryptedServerDat ? "COHook.dll" : LegacyHookDLL;
+            Core.LogWritter.Write("Client " + SelectedServer.ServerVersion +
+                " hook: " + HookDLL + ", decryptedServerDat=" + useDecryptedServerDat);
             bool alreadyUsingLoader = Process.GetProcessesByName(Process.GetCurrentProcess().ProcessName).Length > 1;
             if (alreadyUsingLoader) Core.LogWritter.Write("Detected already using ConquerLoader.");
 
@@ -639,7 +646,8 @@ namespace ConquerLoader.Forms.WPF
 
             if (useDecryptedServerDat)
             {
-                if (SelectedServer.ServerVersion <= 6186)
+                if (SelectedServer.ServerVersion >= Constants.MinVersionCreateFlashFix &&
+                    SelectedServer.ServerVersion <= 6186)
                 {
                     if (!Injector.StartInjection(WinForms.Application.StartupPath + @"\COFlashFixer.dll", (uint)conquerProc.Id, worker).Injected)
                     {

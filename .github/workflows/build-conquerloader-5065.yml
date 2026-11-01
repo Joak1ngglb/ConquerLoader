@@ -72,6 +72,7 @@ jobs:
           New-Item -ItemType Directory -Path $dist -Force | Out-Null
           Copy-Item "$source/*" $dist -Recurse -Force
           Copy-Item 'profiles/redux-5065.local.json' "$dist/config.json" -Force
+          Copy-Item 'tools/Diagnose-Flash5065.ps1' "$dist/Diagnose-Flash5065.ps1" -Force
           Copy-Item 'FlashFix-CLHook.dll' "$dist/CLHook.dll" -Force
           if (-not (Test-Path "$dist/CLHook.dll")) { throw 'Missing native Flash-enabled legacy hook' }
           Write-Host "Distributed CLHook from native source: $((Get-Item "$dist/CLHook.dll").Length) bytes"

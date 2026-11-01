@@ -103,3 +103,24 @@ virtual y evaluar un reemplazo de login sin Flash a largo plazo.
 
 No modificar `Conquer.exe` en disco; el parche solo afecta el flujo
  del launcher. Mantener rutas y hashes separados para pruebas.
+
+
+## Diagnóstico del Flash que sigue fallando
+
+El ZIP incluye el script solo lectura `Diagnose-Flash5065.ps1`.
+Ejecutar desde la carpeta del cliente en PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Diagnose-Flash5065.ps1
+```
+
+Verifica arquitectura x86 del cliente/OCX/CLHook, si hay registro COM
+Flash de **32 bits**, firma/versión/hash del Flash.ocx existente,
+config.json e incidencias de `conquerloader.log`. No registra nada.
+
+**Problema subyacente:** el cliente 5065 no solo abre `Flash.ocx`
+como DLL: crea un control COM `CShockwaveFlash`. El hook CLHook
+solo intercepta una llamada a `LoadLibraryExW`; si COM no está registrado,
+el hook no resuelve la activación de ese control. El uso seguro de un
+ActiveX de 2007 en el host no es recomendable. El diagnóstico distingue
+esto de una inyección CLHook fallida.

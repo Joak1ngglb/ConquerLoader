@@ -30,8 +30,12 @@ jobs:
       - name: Restore NuGet packages
         shell: pwsh
         run: |
-          nuget restore 'ConquerLoader/ConquerLoader.sln' -PackagesDirectory 'ConquerLoader/packages' -NonInteractive -Verbosity normal
-          if ($LASTEXITCODE -ne 0) { throw 'NuGet restore failed' }
+          # Restore the packages.config files directly. The legacy solution has two CLHook entries
+          # and NuGet 7 rejects duplicate project names when asked to parse the .sln.
+          foreach ($config in @('ConquerLoader/ConquerLoader/packages.config', 'ConquerLoader/CLCore/packages.config')) {
+            nuget restore $config -PackagesDirectory 'ConquerLoader/packages' -NonInteractive -Verbosity normal
+            if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed for $config" }
+          }
       - name: Compile launcher (Release x86, .NET Framework 4.6.2)
         shell: pwsh
         run: |

@@ -381,7 +381,7 @@ namespace ConquerLoader.Forms.WPF
         // Flash for Conquer 5065 is distributed as a local ActiveX OCX.
         // The loader does not register it globally: the hook resolves its
         // COM class factory from the chosen local module, if compatible.
-        private static bool ConfirmLocalFlashFor5065(string clientDirectory)
+        private bool ConfirmLocalFlashFor5065(string clientDirectory)
         {
             var path = Path.Combine(clientDirectory, "Flash.ocx");
             if (!File.Exists(path))

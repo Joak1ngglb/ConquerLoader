@@ -180,3 +180,23 @@ En Windows PowerShell:
 Test-NetConnection 127.0.0.1 -Port 9958
 Test-NetConnection 127.0.0.1 -Port 5816
 ```
+
+## Ventana de Conquer colapsada en una franja horizontal
+
+El login sin Flash ya reconoce la estructura de autenticación, pero no
+recrea automáticamente la UI SWF del cliente. A veces la ventana gráfica de
+Conquer.exe aparece como una franja horizontal (aprox. 800x20) en lugar de
+800x600. El módulo de login comprueba el rectángulo de la ventana real,
+excluye ventanas auxiliares y únicamente si está claramente colapsada
+intenta recuperar el viewport a 800x600, una sola vez. En el login nativo
+se informa el tamaño detectado, o que la ventana continúa colapsada.
+
+**Esta recuperación no sustituye el contenido Flash**: puede quedar la
+ventana completa negra hasta que funcione la autenticación con Redux.
+La ventana nativa separada contiene los campos de login. Si aparece
+'Ventana del juego colapsada', no ingresar claves y verificar ventana,
+hooks y renderizador. Si el estado del launcher es OFFLINE, iniciar Redux y
+comprobar los puertos 9958/5816.
+
+El ajuste solo se aplica al Conquer.exe exacto para el que el hook valida
+timestamp y bytes; no toca el ejecutable del disco.

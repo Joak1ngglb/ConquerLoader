@@ -21,6 +21,8 @@ HHOOK g_hook=NULL;
 HWND g_user=NULL, g_pass=NULL, g_status=NULL, g_loginWindow=NULL;
 DWORD g_nativeGameThread=0;
 BYTE* g_nativeLoginObject=NULL;
+HWND g_gameWindow=NULL;
+volatile LONG g_windowSizeChecked=0;
 char g_account[16]={0}, g_password[16]={0};
 volatile LONG g_pending=0;
 
@@ -59,20 +61,48 @@ bool Ready() {
     g_nativeLoginObject=object;
     return true;
 }
-// Find the Conquer game window's own UI thread (not the native login popup).
+// Enumerate only real top-level client windows in the current game process.
+// The separate native login popup is NOT the game viewport.
+struct GameWindowInfo { HWND hwnd; DWORD thread; LONG width; LONG height; };
 BOOL CALLBACK FindGameWindow(HWND hwnd,LPARAM context) {
+    GameWindowInfo* info=reinterpret_cast<GameWindowInfo*>(context);
     DWORD processId=0;
     DWORD threadId=GetWindowThreadProcessId(hwnd,&processId);
     if(processId!=GetCurrentProcessId() || hwnd==g_loginWindow || !IsWindowVisible(hwnd))
         return TRUE;
-    if(threadId==GetCurrentThreadId())return TRUE;
-    *reinterpret_cast<DWORD*>(context)=threadId;
-    return FALSE;
+    if(threadId==GetCurrentThreadId() || GetWindow(hwnd,GW_OWNER)!=NULL)return TRUE;
+    RECT bounds={};
+    if(!GetWindowRect(hwnd,&bounds))return TRUE;
+    LONG width=bounds.right-bounds.left;
+    LONG height=bounds.bottom-bounds.top;
+    // Affected client displays a ~800-pixel wide, thin patterned border.
+    // Ignore helper windows, then pick the largest plausible game viewport.
+    if(width<450 || width>4096 || height<12 || height>2160)return TRUE;
+    if(!info->hwnd || width>info->width) {
+        info->hwnd=hwnd; info->thread=threadId;
+        info->width=width; info->height=height;
+    }
+    return TRUE;
 }
-DWORD ResolveGameThread() {
-    DWORD threadId=0;
-    EnumWindows(FindGameWindow,reinterpret_cast<LPARAM>(&threadId));
-    return threadId;
+GameWindowInfo ResolveGameWindow() {
+    GameWindowInfo info={};
+    EnumWindows(FindGameWindow,reinterpret_cast<LPARAM>(&info));
+    return info;
+}
+bool RecoverCollapsedGameWindow(const GameWindowInfo& game) {
+    if(!game.hwnd || game.height>=180 || game.width<450)return false;
+    // Do not touch already-normal windows. 800x600 is the original
+    // supported size for this exact 5065 build; include window frame.
+    LONG style=GetWindowLongA(game.hwnd,GWL_STYLE);
+    LONG exStyle=GetWindowLongA(game.hwnd,GWL_EXSTYLE);
+    RECT desired={0,0,800,600};
+    if(!AdjustWindowRectEx(&desired,static_cast<DWORD>(style),FALSE,
+                          static_cast<DWORD>(exStyle)))return false;
+    int outerWidth=desired.right-desired.left;
+    int outerHeight=desired.bottom-desired.top;
+    if(outerWidth<650 || outerHeight<450)return false;
+    return SetWindowPos(game.hwnd,NULL,0,0,outerWidth,outerHeight,
+        SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED)!=FALSE;
 }
 LRESULT CALLBACK OnGameMessage(int code,WPARAM w,LPARAM l) {
     if(code>=0 && l) {
@@ -126,12 +156,31 @@ LRESULT CALLBACK UiProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
         }
         case WM_TIMER:
             if(Ready()) {
-                if(!g_hook) {
-                    g_nativeGameThread=ResolveGameThread();
-                    if(g_nativeGameThread)
-                        g_hook=SetWindowsHookExA(WH_GETMESSAGE,OnGameMessage,g_module,g_nativeGameThread);
+                GameWindowInfo game=ResolveGameWindow();
+                g_gameWindow=game.hwnd;
+                if(game.hwnd && !g_windowSizeChecked) {
+                    // Only attempt a one-time recovery if the window is
+                    // obviously collapsed into the narrow line shown by 5065.
+                    RecoverCollapsedGameWindow(game);
+                    InterlockedExchange(&g_windowSizeChecked,1);
+                    game=ResolveGameWindow();
                 }
-                Status(g_hook ? "Listo para autenticar con Redux." : "Login localizado; esperando el hilo grafico...");
+                if(!g_hook && game.thread) {
+                    g_nativeGameThread=game.thread;
+                    g_hook=SetWindowsHookExA(WH_GETMESSAGE,OnGameMessage,g_module,g_nativeGameThread);
+                }
+                char status[160]={};
+                if(!game.hwnd) {
+                    Status("Login listo; buscando ventana grafica de Conquer...");
+                } else if(game.height<180) {
+                    wsprintfA(status,"Ventana del juego colapsada (%ldx%ld).",game.width,game.height);
+                    Status(status);
+                } else {
+                    wsprintfA(status,g_hook ?
+                        "Juego %ldx%ld - login nativo listo." :
+                        "Juego %ldx%ld - esperando hilo grafico...", game.width,game.height);
+                    Status(status);
+                }
             } else Status("Buscando el objeto del login en el cliente...");
             return 0;
         case WM_COMMAND:

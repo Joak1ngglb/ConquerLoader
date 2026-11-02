@@ -44,9 +44,10 @@ Ese hook global varargs podía interceptar llamadas no relacionadas, reentrar en
 otra función de formato o romper la disciplina cdecl de la pila. Sólo quedan
 Detours con ABI `__stdcall` compatible para `connect` y `send`.
 
-Los diagnósticos registran profundidad por hilo, estabilidad del marcador de
-pila y, ante `0xC0000005`, una cadena EBP y candidatos ejecutables encontrados
-desde ESP. Esto permite distinguir recursión (`depth > 1`), retorno/pila dañada
-(`stack-marker-stable=NO` o cadena no monótona) y obtener módulos+offsets de la
-traza. La eliminación del riesgo está validada por código y pruebas; la
+Los diagnósticos registran profundidad por hilo y ESP antes y después del
+trampoline. Ante `0xC0000005`, registran además una cadena EBP y candidatos
+ejecutables encontrados desde ESP. Esto permite distinguir recursión
+(`depth > 1`), calling convention incorrecta (`calling-convention-balanced=NO`)
+y una cadena EBP no monótona, además de obtener módulos y offsets de la traza.
+La eliminación del riesgo está validada por código y pruebas; la
 resolución del crash requiere todavía una ejecución con el cliente real.

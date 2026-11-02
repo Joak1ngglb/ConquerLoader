@@ -18,7 +18,8 @@ $send5065=$hook.Substring($hook.IndexOf('if(ClientVersion==5065)'))
 $send5065=$send5065.Substring(0,$send5065.IndexOf('else if (legacy'))
 Assert (-not $send5065.Contains('Decrypt(') -and -not $send5065.Contains('Encrypt(') -and
         -not $send5065.Contains('memcpy') -and -not $send5065.Contains('szPassword')) '5065 send observer must not inspect or mutate credentials.'
-Assert ($hook.Contains('__declspec(thread) LONG g_sendHookDepth') -and $hook.Contains('stack-marker-stable=')) 'Recursion/stack diagnostics missing.'
+Assert ($hook.Contains('__declspec(thread) LONG g_sendHookDepth') -and
+        $hook.Contains('ESP-before=') -and $hook.Contains('calling-convention-balanced=')) 'Recursion/stack/calling-convention diagnostics missing.'
 Assert ($hook.Contains('LogExceptionStack5065') -and $hook.Contains('ebp-return') -and $hook.Contains('esp-code')) 'Crash call trace missing.'
 Assert ($hook.Contains('ConquerLoader-Protocol5065-%s-%lu') -and
         $early.Contains('ConquerLoader-Protocol5065-Ready-') -and

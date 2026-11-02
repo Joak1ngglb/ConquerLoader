@@ -13,7 +13,6 @@
 #include <time.h>
 //
 #include <cstdio>
-#include <intrin.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include "CFlashFix.h"
@@ -231,7 +230,6 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 int __stdcall csv3_send(SOCKET s, PBYTE buf, int len, int flags)
 {
 	LONG depth=++g_sendHookDepth;
-	DWORD_PTR stackMarkerBefore=reinterpret_cast<DWORD_PTR>(_AddressOfReturnAddress());
 	if(ClientVersion==5065)
 	{
 		char wireLog[320]={};
@@ -298,11 +296,15 @@ int __stdcall csv3_send(SOCKET s, PBYTE buf, int len, int flags)
 	LPFSEND original = native5065_send ? native5065_send :
 		reinterpret_cast<LPFSEND>(send_stub.Address);
 	if(!original){Flash5065Trace("ERROR: send trampoline is NULL.");WSASetLastError(WSAEINVAL);--g_sendHookDepth;return SOCKET_ERROR;}
+	DWORD stackPointerBefore=0;
+	__asm mov stackPointerBefore, esp
 	int result=original(s,buf,len,flags);
+	DWORD stackPointerAfter=0;
+	__asm mov stackPointerAfter, esp
 	int error=result==SOCKET_ERROR?WSAGetLastError():0;
-	DWORD_PTR stackMarkerAfter=reinterpret_cast<DWORD_PTR>(_AddressOfReturnAddress());
-	char sendLog[192]={}; sprintf_s(sendLog,"send result=%d requested=%d WSAError=%d depth=%ld stack-marker-stable=%s.",
-		result,len,error,depth,stackMarkerBefore==stackMarkerAfter?"yes":"NO");
+	char sendLog[224]={}; sprintf_s(sendLog,"send result=%d requested=%d WSAError=%d depth=%ld ESP-before=0x%08lX ESP-after=0x%08lX calling-convention-balanced=%s.",
+		result,len,error,depth,stackPointerBefore,stackPointerAfter,
+		stackPointerBefore==stackPointerAfter?"yes":"NO");
 	Flash5065Trace(sendLog);
 	--g_sendHookDepth;
 	if(result==SOCKET_ERROR)WSASetLastError(error);

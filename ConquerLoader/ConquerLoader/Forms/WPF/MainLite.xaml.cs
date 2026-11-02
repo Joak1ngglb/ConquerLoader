@@ -661,6 +661,7 @@ namespace ConquerLoader.Forms.WPF
                 ? EarlyInjectedClient.Launch(
                     pathToConquerExe, workingDir,
                     Path.Combine(workingDir, HookDLL),
+                    LoaderConfig.UseOriginalFlashLogin,
                     message => Core.LogWritter.Write("[Early5065] " + message))
                 : Process.Start(new ProcessStartInfo
                 {

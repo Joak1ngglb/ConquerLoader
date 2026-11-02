@@ -143,12 +143,13 @@ A partir del commit de implementación del cliente, la rama incorpora
   contra Redux, conservando el protocolo de red del juego.
 - No instala, registra ni carga `Flash.ocx` para el login nativo.
 
-**Estado actual:** el login nativo es el modo predeterminado, se inyecta antes
-del entry point y valida el SHA-256 exacto
+**Estado actual:** el login Flash original vuelve a ser el modo predeterminado.
+`CLHook.dll` se inyecta antes del entry point y valida el SHA-256 exacto
 `97CCC3276D46D46BB91AD62E758D1FB622C036F6224EED5EA7C121A80E550A89`
-antes de aplicar cualquier RVA. La compilación y las pruebas de regresión
-pasan; todavía falta la prueba real con ese `Conquer.exe` y un servidor Redux
-activo para confirmar autenticación y entrada al juego.
+antes de iniciar. `ole32.dll` es una dependencia temprana real; los hooks de
+`LoadLibraryExW`, `CoCreateInstance`, `CoGetClassObject` y `CLSIDFromProgID`
+se instalan atómicamente, y luego un worker carga `Flash.ocx` local y verifica
+`DllGetClassObject` fuera del loader lock. El modo nativo queda como alternativa.
 
 Prueba: hacé una copia de la carpeta original, copiá encima el *paquete
 completo* de ConquerLoader de la rama y abrí `ConquerLoader.exe`.
@@ -212,9 +213,11 @@ La configuración ahora admite `UseOriginalFlashLogin`:
   mediante redirección y class factory sin registro COM global.
 - `false`: login Win32 nativo sin cargar ni registrar `Flash.ocx`.
 
-El perfil incluido en el ZIP usa `UseOriginalFlashLogin=false`. El modo Flash
-queda únicamente como fallback manual y no debe probarse fuera de una VM con
-un OCX x86 de procedencia confiable.
+El perfil incluido en el ZIP usa `UseOriginalFlashLogin=true`. Requiere un
+`Flash.ocx` x86 junto a `Conquer.exe`, no lo registra globalmente y no lo
+incluye en el ZIP. Debe probarse únicamente en una VM aislada con un OCX de
+procedencia confiable. `UseOriginalFlashLogin=false` conserva el login Win32
+nativo como alternativa manual.
 
 Wipro Engineering (anteriormente HARMAN DTS) informa soporte comercial
 para Flash Player versión 50.0 bajo licencia especial; la disponibilidad

@@ -20,7 +20,7 @@ param(
     [ValidateRange(1, 65535)][int]$LoginPort = 9958,
     [ValidateRange(1, 65535)][int]$GamePort = 5816,
     [ValidateNotNullOrEmpty()][string]$ServerName = 'Redux_Beta',
-    [ValidateSet('Flash','Native')][string]$LoginMode = 'Native',
+    [ValidateSet('Flash','Native')][string]$LoginMode = 'Flash',
     [switch]$Force
 )
 

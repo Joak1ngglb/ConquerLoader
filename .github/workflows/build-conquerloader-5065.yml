@@ -48,12 +48,13 @@ jobs:
         run: |
           ./tests/Test-EarlyFlash5065.ps1
           ./tests/Test-NativeLogin5065.ps1
+          ./tests/Test-FlashCom5065.ps1
       - name: Verify staged Flash diagnostic behavior
         shell: pwsh
         run: |
           $profile = Get-Content 'profiles/redux-5065.local.json' -Raw | ConvertFrom-Json
-          if ($profile.UseOriginalFlashLogin) { throw 'Native Flashless login must be default' }
-          if ($profile.Flash5065DiagnosticMode -ne 0) { throw 'Native profile must use normal networking' }
+          if (-not $profile.UseOriginalFlashLogin) { throw 'Original Flash login must be default' }
+          if ($profile.Flash5065DiagnosticMode -ne 0) { throw 'Flash profile must use normal networking' }
           if (-not (Test-Path tools/Diagnose-Crash5065.ps1)) { throw 'Crash reporter missing' }
       - name: Compile launcher (Release x86, .NET Framework 4.6.2)
         shell: pwsh
@@ -104,11 +105,10 @@ jobs:
           2. config.json apunta a 127.0.0.1:9958 (login) y :5816 (juego).
           3. Si Redux usa otra IP/puertos, configura con tools/Configure-Redux5065.ps1.
           4. Este 5065 usa CLHook.dll compilado de ConquerHook/ (no COFlashFixer.dll).
-          5. UseOriginalFlashLogin=false (predeterminado): abre login Win32 nativo,
-             valida SHA256 del Conquer.exe 5065 y no carga Flash.ocx.
-          6. UseOriginalFlashLogin=true: alternativa que conserva el login SWF original
+          5. UseOriginalFlashLogin=true (predeterminado): conserva el login SWF original
              y redirige Flash ActiveX hacia Flash.ocx LOCAL de la carpeta.
-             Para ausencia de registro COM, prueba el class factory local.
+             Activa su class factory local sin registro COM global.
+          6. UseOriginalFlashLogin=false: alternativa Win32 nativa sin Flash.
           7. No incluye ningun Flash.ocx. Probar un OCX antiguo solo en VM;
              una DLL local sin firma puede ejecutar codigo no confiable.
           8. Los cambios de modo se guardan en config.json. Comprueba

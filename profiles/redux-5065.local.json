@@ -46,7 +46,7 @@
   "FullScreen": false,
   "ServernameChange": false,
   "DisableAutoFixFlash": false,
-  "UseOriginalFlashLogin": false,
+  "UseOriginalFlashLogin": true,
   "Flash5065DiagnosticMode": 0,
   "Title": "Redux 5065 local",
   "Description": "Conquer Online 5065 - Redux local",

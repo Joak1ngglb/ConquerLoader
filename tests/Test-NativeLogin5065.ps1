@@ -14,9 +14,9 @@ Assert ($native.Contains('kExpectedSha256') -and
 Assert ($injector.Contains('97CCC3276D46D46BB91AD62E758D1FB622C036F6224EED5EA7C121A80E550A89')) 'Launcher hash gate missing.'
 Assert ($native.Contains('kNativeLoginRva') -and -not $native.Contains('kNativeLogin=0x')) 'Login target must be an RVA behind exact-build validation.'
 Assert ($native.IndexOf('ExactBuild()') -lt $native.IndexOf('WriteCode(g_image+kFlashCheckRva')) 'Validation must precede patching.'
-Assert ($hook.Contains('Deferred5065NativeProtocolHooks')) 'Native Redux protocol hooks must be deferred.'
+Assert ($hook.Contains('Deferred5065ProtocolHooks')) 'Redux protocol hooks must be deferred for both login modes.'
 Assert ($hook.Contains('DetourAttach(reinterpret_cast<PVOID*>(&native5065_connect)') -and
         $hook.Contains('DetourAttach(reinterpret_cast<PVOID*>(&native5065_send)')) 'Native networking must use Detours trampolines.'
 Assert ($hook.Contains('if (flashless)') -and $hook.Contains('return;')) 'Native mode must not fall through to generic legacy patching.'
-Assert ($profile.UseOriginalFlashLogin -eq $false) 'Native login must be the distributed default.'
-Write-Host 'OK: exact-build native 5065 login, early injection and deferred protocol hooks verified.'
+Assert ($profile.UseOriginalFlashLogin -eq $true) 'Flash must be default while native remains available by configuration.'
+Write-Host 'OK: exact-build native 5065 login remains available as an alternative.'

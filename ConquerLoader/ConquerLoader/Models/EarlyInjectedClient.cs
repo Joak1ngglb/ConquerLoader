@@ -24,6 +24,8 @@ namespace ConquerLoader.Models
         private const uint MemReserve = 0x00002000;
         private const uint MemRelease = 0x00008000;
         private const uint PageReadWrite = 0x04;
+        private const uint Synchronize = 0x00100000;
+        private const uint WaitObject0 = 0x00000000;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct StartupInfo
@@ -93,8 +95,14 @@ namespace ConquerLoader.Models
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr handle);
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr OpenEvent(uint desiredAccess, bool inheritHandle, string name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
         public static Process Launch(string executablePath, string directory,
-            string hookPath, Action<string> log)
+            string hookPath, bool requireFlashReady, Action<string> log)
         {
             if (IntPtr.Size != 4)
                 throw new InvalidOperationException("La inyeccion inicial exige ConquerLoader x86.");
@@ -182,6 +190,47 @@ namespace ConquerLoader.Models
                         "La inyeccion APC no cargo CLHook.dll antes de iniciar el juego; se cancelo la prueba.");
 
                 log("CLHook.dll confirmado dentro de Conquer.exe; inicio temprano completado.");
+                if (requireFlashReady)
+                {
+                    string readyName = "Local\\ConquerLoader-Flash5065-Ready-" + info.processId;
+                    string failedName = "Local\\ConquerLoader-Flash5065-Failed-" + info.processId;
+                    IntPtr readyEvent = IntPtr.Zero;
+                    IntPtr failedEvent = IntPtr.Zero;
+                    bool flashReady = false;
+                    watch.Restart();
+                    try
+                    {
+                        while (watch.ElapsedMilliseconds < 12000 && !process.HasExited)
+                        {
+                            if (readyEvent == IntPtr.Zero)
+                                readyEvent = OpenEvent(Synchronize, false, readyName);
+                            if (failedEvent == IntPtr.Zero)
+                                failedEvent = OpenEvent(Synchronize, false, failedName);
+                            if (failedEvent != IntPtr.Zero &&
+                                WaitForSingleObject(failedEvent, 0) == WaitObject0)
+                                throw new InvalidOperationException(
+                                    "La activacion local de Flash fallo. Revisar la ultima etapa y HRESULT en CLHook-5065.log.");
+                            if (readyEvent != IntPtr.Zero &&
+                                WaitForSingleObject(readyEvent, 0) == WaitObject0)
+                            {
+                                flashReady = true;
+                                break;
+                            }
+                            Thread.Sleep(50);
+                            process.Refresh();
+                        }
+                    }
+                    finally
+                    {
+                        if (readyEvent != IntPtr.Zero) CloseHandle(readyEvent);
+                        if (failedEvent != IntPtr.Zero) CloseHandle(failedEvent);
+                    }
+                    if (!flashReady)
+                        throw new InvalidOperationException(
+                            "CLHook.dll cargo, pero Flash.ocx no publico una class factory lista en 12 segundos. " +
+                            "Revisar CLHook-5065.log.");
+                    log("Flash.ocx local x86 y DllGetClassObject verificados; activacion COM sin registro lista.");
+                }
                 // A loaded DLL does not mean Conquer.exe reached its main window.
                 // Detect immediate fatal exits instead of showing 100% as success.
                 for (int i = 0; i < 12; ++i)

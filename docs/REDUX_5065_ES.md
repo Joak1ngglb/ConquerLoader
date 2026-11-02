@@ -200,3 +200,44 @@ comprobar los puertos 9958/5816.
 
 El ajuste solo se aplica al Conquer.exe exacto para el que el hook valida
 timestamp y bytes; no toca el ejecutable del disco.
+
+
+## Volver al Flash original con runtime con soporte (2026)
+
+La configuración ahora admite `UseOriginalFlashLogin`:
+
+- `true`: iniciar Conquer 5065 sin parchear su test de Flash ni abrir
+  el formulario nativo; utiliza el objeto COM ActiveX **x86** registrado.
+  Desactiva expresamente el hook `CFlashFix` que antes redirigía al
+  `Flash.ocx` local sin firma de 2007. No instala ni registra ningún OCX.
+- `false`: conserva el prototipo anterior de login nativo sin Flash.
+
+El perfil incluido en el ZIP usa `UseOriginalFlashLogin=true`, como pidió
+el usuario. Por seguridad, si falta un ActiveX Flash x86 **registrado y con
+archivo real**, el loader advierte antes del arranque. La comprobación
+registra únicamente presencia, no valida licencias, firmas ni
+compatibilidad funcional. Si el runtime es antiguo o no confiable, **no
+lo uses en el Windows principal**, aunque pase la comprobación.
+
+Wipro Engineering (anteriormente HARMAN DTS) informa soporte comercial
+para Flash Player versión 50.0 bajo licencia especial; la disponibilidad
+de un ActiveX x86 compatible con Conquer 5065 **debe confirmarla el
+proveedor**. El AIR SDK NO reemplaza `Flash.ocx`; Ruffle NO es un control
+ActiveX que pueda instalarse directamente dentro del juego.
+Documentación oficial: https://airsdk.harman.com/faq
+Contacto publicado: adobe.support@wipro.com
+
+Para crear un perfil original:
+```powershell
+.\tools\Configure-Redux5065.ps1 -ClientDirectory 'C:\Juegos\Conquer Online' -LoginMode Flash -Force
+```
+
+Para volver al modo nativo experimental, sin cambiar ningún binario:
+```powershell
+.\tools\Configure-Redux5065.ps1 -ClientDirectory 'C:\Juegos\Conquer Online' -LoginMode Native -Force
+```
+
+También se puede editar directamente `config.json`, con el juego cerrado.
+**No instalar Flash antiguo de sitios no oficiales** ni crear exclusiones
+de antivirus. El modo original Flash depende de una licencia válida y un
+ActiveX compatible: compilar ConquerLoader no garantiza esa compatibilidad.

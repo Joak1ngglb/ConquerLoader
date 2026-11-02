@@ -20,6 +20,7 @@ param(
     [ValidateRange(1, 65535)][int]$LoginPort = 9958,
     [ValidateRange(1, 65535)][int]$GamePort = 5816,
     [ValidateNotNullOrEmpty()][string]$ServerName = 'Redux_Beta',
+    [ValidateSet('Flash','Native')][string]$LoginMode = 'Flash',
     [switch]$Force
 )
 
@@ -89,6 +90,7 @@ $config = [ordered]@{
     FullScreen = $false
     ServernameChange = $false
     DisableAutoFixFlash = $false
+    UseOriginalFlashLogin = ($LoginMode -eq 'Flash')
     Title = 'Redux 5065 local'
     Description = 'Conquer Online 5065 - Redux'
     Lang = 'es'

@@ -91,11 +91,14 @@ jobs:
           2. config.json apunta a 127.0.0.1:9958 (login) y :5816 (juego).
           3. Si Redux usa otra IP/puertos, configura con tools/Configure-Redux5065.ps1.
           4. Este 5065 usa CLHook.dll compilado de ConquerHook/ (no COFlashFixer.dll).
-          5. La correccion de Flash esta habilitada en config.json. NO registres OCX
-             ni instales Flash antiguo en el sistema. Probar primero en entorno aislado.
-          6. Para 5065 el CLHook experimental intenta abrir una ventana
-             'Redux 5065 - Sin Adobe Flash'. No se ha probado el login real.
-          7. Usa Windows Defender. Si falla revisa conquerloader.log.
+          5. El perfil actualizado tiene UseOriginalFlashLogin=true: usa
+             el control ActiveX x86 REGISTRADO con licencia y soporte.
+             NO lo incluye. NO registres Flash.ocx de 2007.
+          6. Sin ActiveX x86 instalado, ConquerLoader avisa y no inicia.
+             Para modo nativo experimental: UseOriginalFlashLogin=false.
+          7. Los cambios de modo se guardan en config.json. Comprueba
+             conquerloader.log si surge algun error de login.
+          8. Usa Windows Defender y prueba componentes antiguos en VM.
           Compilado en GitHub Actions. No incluye el cliente ni prueba la seguridad de las DLL embebidas.
           '@ | Set-Content -LiteralPath "$dist/LEEME-Redux5065.txt" -Encoding UTF8
       - name: Upload compiled launcher (ZIP)

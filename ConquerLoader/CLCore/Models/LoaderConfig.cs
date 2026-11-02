@@ -15,6 +15,8 @@ namespace CLCore.Models
         public bool FullScreen { get; set; }
         public bool ServernameChange { get; set; }
         public bool DisableAutoFixFlash { get; set; }
+        // Switch for licensed, system-registered 32-bit ActiveX Flash (not the embedded 2007 OCX).
+        public bool UseOriginalFlashLogin { get; set; }
         public string Title { get; set; }
         public string Description { get; set; }
         public string Lang { get; set; }

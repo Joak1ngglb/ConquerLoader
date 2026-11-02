@@ -375,6 +375,41 @@ namespace ConquerLoader.Forms.WPF
             }
         }
 
+        // The 5065 Flash UI is a 32-bit ActiveX COM control. A Flash.ocx file
+        // in the game folder is not sufficient. Do not silently register it or
+        // redirect a licensed current runtime to the bundled 2007 file.
+        private static bool HasRegisteredFlashActiveX32()
+        {
+            const string clsid = @"SOFTWARE\Classes\CLSID\{D27CDB6E-AE6D-11CF-96B8-444553540000}\InprocServer32";
+            foreach (Microsoft.Win32.RegistryHive hive in new[] {
+                Microsoft.Win32.RegistryHive.CurrentUser,
+                Microsoft.Win32.RegistryHive.LocalMachine })
+            {
+                try
+                {
+                    using (var root = Microsoft.Win32.RegistryKey.OpenBaseKey(
+                        hive, Microsoft.Win32.RegistryView.Registry32))
+                    using (var key = root.OpenSubKey(clsid))
+                    {
+                        if (key == null) continue;
+                        var value = key.GetValue(null) as string;
+                        if (String.IsNullOrWhiteSpace(value)) continue;
+                        var path = Environment.ExpandEnvironmentVariables(value.Trim('"'));
+                        if (File.Exists(path)) return true;
+                    }
+                }
+                catch (System.Security.SecurityException)
+                {
+                    // Registry is locked down. Do not treat it as verified.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Registry is locked down. Do not treat it as verified.
+                }
+            }
+            return false;
+        }
+
         private void BtnStart_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -387,6 +422,15 @@ namespace ConquerLoader.Forms.WPF
                 SelectedServer = LoaderConfig.Servers.Where(x => x.ServerName == lstServers.SelectedItem.ToString()).FirstOrDefault();
                 if (SelectedServer != null)
                 {
+                    if (SelectedServer.ServerVersion == 5065 &&
+                        LoaderConfig.UseOriginalFlashLogin && !HasRegisteredFlashActiveX32())
+                    {
+                        ShowWarning("Modo Flash original: no se encontro un control ActiveX Flash x86 registrado. " +
+                            "El Flash.ocx de la carpeta es antiguo y no se debe registrar en este Windows. " +
+                            "Se requiere una version con licencia y soporte del proveedor. " +
+                            "Para seguir probando sin Flash cambia UseOriginalFlashLogin=false en config.json.");
+                        return;
+                    }
                     LoaderConfig.DefaultServer = SelectedServer;
                     Core.SaveLoaderConfig(LoaderConfig);
 
@@ -424,8 +468,12 @@ namespace ConquerLoader.Forms.WPF
                         + Environment.NewLine + "HOSTNAME=" + SelectedServer.Hostname
                         + Environment.NewLine + "SERVER_VERSION=" + SelectedServer.ServerVersion
                         + Environment.NewLine + "SERVERNAME_MEMORYADDRESS=" + SelectedServer.ServerNameMemoryAddress
-                        + Environment.NewLine + "DISABLE_AUTOFIX_FLASH=" + (LoaderConfig.DisableAutoFixFlash ? "1" : "0")
-                        + Environment.NewLine + "FLASHLESS_NATIVE_LOGIN=" + (SelectedServer.ServerVersion == 5065 ? "1" : "0"));
+                        + Environment.NewLine + "DISABLE_AUTOFIX_FLASH=" +
+                            ((LoaderConfig.DisableAutoFixFlash || LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
+                        + Environment.NewLine + "FLASHLESS_NATIVE_LOGIN=" +
+                            ((SelectedServer.ServerVersion == 5065 && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0"));
+                    Core.LogWritter.Write("5065 login mode: " +
+                        (LoaderConfig.UseOriginalFlashLogin ? "original licensed Flash ActiveX" : "experimental native"));
 
                     Core.LogWritter.Write("Created the Hook Configuration");
 

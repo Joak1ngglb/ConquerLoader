@@ -1,23 +1,28 @@
-/**
-* This fix has been created by Ultimation from Elitepvpers :]
-* From: https://www.elitepvpers.com/forum/co2-pserver-guides-releases/4858019-release-flash-fix-old-clients.html
-*/
-
+#pragma once
 #include "stdafx.h"
 #include <windows.h>
+#include <objbase.h>
 #include "detours.h"
-#include <iostream>
-#pragma once
 
-class CFlashFix
-{
-	typedef HMODULE(_stdcall* HookLoadLibrary)(_In_ LPCWSTR lpLibFileName,
-		_Reserved_ HANDLE hFile,
-		_In_ DWORD dwFlags);
+// Flash loader for legacy Conquer clients. Only hooks the current Conquer
+// process, and only redirects the ShockwaveFlash ActiveX class.
+class CFlashFix {
 public:
-	static void Hook();
-	static HookLoadLibrary pLoadLibrary;
-	static  HMODULE _stdcall LoadLibraryDetour(_In_ LPCWSTR lpLibFileName,
-		_Reserved_ HANDLE hFile,
-		_In_ DWORD dwFlags);
+    typedef HMODULE (WINAPI* HookLoadLibrary)(LPCWSTR, HANDLE, DWORD);
+    typedef HRESULT (WINAPI* HookCoCreateInstance)(REFCLSID, LPUNKNOWN, DWORD, REFIID, LPVOID*);
+    typedef HRESULT (WINAPI* HookCoGetClassObject)(REFCLSID, DWORD, COSERVERINFO*, REFIID, LPVOID*);
+    typedef HRESULT (WINAPI* HookCLSIDFromProgID)(LPCOLESTR, LPCLSID);
+
+    static HookLoadLibrary pLoadLibrary;
+    static HookCoCreateInstance pCoCreateInstance;
+    static HookCoGetClassObject pCoGetClassObject;
+    static HookCLSIDFromProgID pCLSIDFromProgID;
+
+    static void Hook();
+    static HMODULE WINAPI LoadLibraryDetour(LPCWSTR filename, HANDLE file, DWORD flags);
+    static HRESULT WINAPI CoCreateInstanceDetour(REFCLSID clsid, LPUNKNOWN outer,
+        DWORD context, REFIID iid, LPVOID* result);
+    static HRESULT WINAPI CoGetClassObjectDetour(REFCLSID clsid, DWORD context,
+        COSERVERINFO* server, REFIID iid, LPVOID* result);
+    static HRESULT WINAPI CLSIDFromProgIDDetour(LPCOLESTR progId, LPCLSID clsid);
 };

@@ -378,36 +378,46 @@ namespace ConquerLoader.Forms.WPF
         // The 5065 Flash UI is a 32-bit ActiveX COM control. A Flash.ocx file
         // in the game folder is not sufficient. Do not silently register it or
         // redirect a licensed current runtime to the bundled 2007 file.
-        private static bool HasRegisteredFlashActiveX32()
+        // Flash for Conquer 5065 is distributed as a local ActiveX OCX.
+        // The loader does not register it globally: the hook resolves its
+        // COM class factory from the chosen local module, if compatible.
+        private static bool ConfirmLocalFlashFor5065(string clientDirectory)
         {
-            const string clsid = @"SOFTWARE\Classes\CLSID\{D27CDB6E-AE6D-11CF-96B8-444553540000}\InprocServer32";
-            foreach (Microsoft.Win32.RegistryHive hive in new[] {
-                Microsoft.Win32.RegistryHive.CurrentUser,
-                Microsoft.Win32.RegistryHive.LocalMachine })
+            var path = Path.Combine(clientDirectory, "Flash.ocx");
+            if (!File.Exists(path))
             {
-                try
+                MessageBox.Show(
+                    "No se encontro Flash.ocx en la carpeta del cliente. " +
+                    "El modo Flash original necesita un Flash.ocx x86 local, " +
+                    "preferiblemente de origen confiable. El loader NO lo instala.",
+                    ProductNameText, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+
+            try
+            {
+                // Inspect the actual OCX rather than trusting the filename.
+                // A legacy OCX is executable code and can be unsafe.
+                var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(path);
+                int major = info.FileMajorPart;
+                if (major < 30)
                 {
-                    using (var root = Microsoft.Win32.RegistryKey.OpenBaseKey(
-                        hive, Microsoft.Win32.RegistryView.Registry32))
-                    using (var key = root.OpenSubKey(clsid))
-                    {
-                        if (key == null) continue;
-                        var value = key.GetValue(null) as string;
-                        if (String.IsNullOrWhiteSpace(value)) continue;
-                        var path = Environment.ExpandEnvironmentVariables(value.Trim('"'));
-                        if (File.Exists(path)) return true;
-                    }
-                }
-                catch (System.Security.SecurityException)
-                {
-                    // Registry is locked down. Do not treat it as verified.
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    // Registry is locked down. Do not treat it as verified.
+                    var proceed = MessageBox.Show(
+                        "Flash.ocx encontrado, version " + info.FileVersion +
+                        ". Es un control antiguo sin soporte y puede tener fallas " +
+                        "de seguridad. Para probarlo, usa una maquina virtual " +
+                        "aislada. ¿Continuar en este entorno bajo tu responsabilidad?",
+                        ProductNameText, MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                    return proceed == MessageBoxResult.Yes;
                 }
             }
-            return false;
+            catch (Exception ex) when (ex is System.IO.IOException || ex is UnauthorizedAccessException)
+            {
+                MessageBox.Show("No se pudo verificar Flash.ocx: " + ex.Message,
+                    ProductNameText, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+            return true;
         }
 
         private void BtnStart_Click(object sender, RoutedEventArgs e)
@@ -423,12 +433,9 @@ namespace ConquerLoader.Forms.WPF
                 if (SelectedServer != null)
                 {
                     if (SelectedServer.ServerVersion == 5065 &&
-                        LoaderConfig.UseOriginalFlashLogin && !HasRegisteredFlashActiveX32())
+                        LoaderConfig.UseOriginalFlashLogin &&
+                        !ConfirmLocalFlashFor5065(WinForms.Application.StartupPath))
                     {
-                        ShowWarning("Modo Flash original: no se encontro un control ActiveX Flash x86 registrado. " +
-                            "El Flash.ocx de la carpeta es antiguo y no se debe registrar en este Windows. " +
-                            "Se requiere una version con licencia y soporte del proveedor. " +
-                            "Para seguir probando sin Flash cambia UseOriginalFlashLogin=false en config.json.");
                         return;
                     }
                     LoaderConfig.DefaultServer = SelectedServer;
@@ -469,11 +476,11 @@ namespace ConquerLoader.Forms.WPF
                         + Environment.NewLine + "SERVER_VERSION=" + SelectedServer.ServerVersion
                         + Environment.NewLine + "SERVERNAME_MEMORYADDRESS=" + SelectedServer.ServerNameMemoryAddress
                         + Environment.NewLine + "DISABLE_AUTOFIX_FLASH=" +
-                            ((LoaderConfig.DisableAutoFixFlash || LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
+                            ((LoaderConfig.DisableAutoFixFlash && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
                         + Environment.NewLine + "FLASHLESS_NATIVE_LOGIN=" +
                             ((SelectedServer.ServerVersion == 5065 && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0"));
                     Core.LogWritter.Write("5065 login mode: " +
-                        (LoaderConfig.UseOriginalFlashLogin ? "original licensed Flash ActiveX" : "experimental native"));
+                        (LoaderConfig.UseOriginalFlashLogin ? "original local Flash ActiveX (no global COM registration)" : "experimental native"));
 
                     Core.LogWritter.Write("Created the Hook Configuration");
 

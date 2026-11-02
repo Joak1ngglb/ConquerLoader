@@ -241,3 +241,37 @@ También se puede editar directamente `config.json`, con el juego cerrado.
 **No instalar Flash antiguo de sitios no oficiales** ni crear exclusiones
 de antivirus. El modo original Flash depende de una licencia válida y un
 ActiveX compatible: compilar ConquerLoader no garantiza esa compatibilidad.
+
+
+## Flash local x86 al estilo Ultimation (implementación con fallback COM)
+
+El artículo de Ultimation (2021) redirige `LoadLibraryExW` a
+`Flash.ocx` situado en la carpeta del cliente. El código anterior de
+`UseOriginalFlashLogin=true` anulaba accidentalmente esa redirección y
+exigía un Flash registrado en Windows. **Corregido.**
+
+Ahora el modo `UseOriginalFlashLogin=true`:
+
+1. Busca `Flash.ocx` junto a `Conquer.exe`.
+2. Habilita el gancho local de `LoadLibraryExW` como en el artículo.
+3. Para cuando el ActiveX no esté registrado, intenta resolver
+   `CLSIDFromProgID`, `CoGetClassObject` y `CoCreateInstance` directamente
+   desde el `DllGetClassObject` exportado por el OCX local.
+4. Deja que el SWF original dibuje su login, **sin** inyectar la ventana
+   nativa experimental ni modificar `Conquer.exe` en disco.
+5. No escribe en el registro de Windows ni registra controles antiguos.
+
+**Límites conocidos:** la inicialización de COM por un OCX puede depender
+de otras claves del registro; el desvío de clase no garantiza compatibilidad
+ni arranque. Si `ole32.dll` todavía no está cargado cuando se instala el
+gancho, el fallback COM podría no entrar en acción. Revisar el log antes de
+afirmar éxito. El cliente debe probarse contra Redux para confirmar login.
+
+El `Flash.ocx` que recibió originalmente el usuario era 7.0.14.0,
+de 32 bits y sin firma. **No lo uses en el Windows principal**: cualquier
+control ActiveX cargado ejecuta código en el proceso y los antiguos tienen
+vulnerabilidades conocidas. Para probar la técnica usar una VM aislada
+con instantánea y un archivo OCX de procedencia verificada; el ZIP no
+distribuye componentes Flash de terceros.
+
+Fuente: https://www.elitepvpers.com/forum/co2-guides-templates/4858018-release-flash-fix-old-clients.html

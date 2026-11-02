@@ -30,10 +30,11 @@ namespace {
         if (n == 0 || n >= MAX_PATH) return false;
         wchar_t* last = wcsrchr(output, L'\\');
         if (!last) return false;
-        *last = L'\0';
+        // Preserve the directory separator; append the OCX after it.
         const wchar_t name[] = L"Flash.ocx";
-        if (last - output + (sizeof(name) / sizeof(wchar_t)) > MAX_PATH) return false;
-        wcscpy_s(last, MAX_PATH - (last - output), name);
+        const size_t prefix = static_cast<size_t>(last + 1 - output);
+        if (prefix + (sizeof(name) / sizeof(wchar_t)) > MAX_PATH) return false;
+        wcscpy_s(last + 1, MAX_PATH - prefix, name);
         DWORD attr = GetFileAttributesW(output);
         return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
     }

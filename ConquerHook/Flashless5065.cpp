@@ -91,11 +91,17 @@ GameWindowInfo ResolveGameWindow() {
 }
 bool RecoverCollapsedGameWindow(const GameWindowInfo& game) {
     if(!game.hwnd || game.height>=180 || game.width<450)return false;
-    // Do not touch already-normal windows. 800x600 is the original
-    // supported size for this exact 5065 build; include window frame.
+    // Keep the existing client width and restore its 4:3 viewport aspect.
+    // Some 5065 distributions default to 800x600, others to 1024x768.
+    // Use only the measured dimensions of the game's own window.
     LONG style=GetWindowLongA(game.hwnd,GWL_STYLE);
     LONG exStyle=GetWindowLongA(game.hwnd,GWL_EXSTYLE);
-    RECT desired={0,0,800,600};
+    RECT currentClient={};
+    if(!GetClientRect(game.hwnd,&currentClient))return false;
+    int clientWidth=currentClient.right-currentClient.left;
+    if(clientWidth<640 || clientWidth>1600)return false;
+    int clientHeight=clientWidth*3/4;
+    RECT desired={0,0,clientWidth,clientHeight};
     if(!AdjustWindowRectEx(&desired,static_cast<DWORD>(style),FALSE,
                           static_cast<DWORD>(exStyle)))return false;
     int outerWidth=desired.right-desired.left;

@@ -243,29 +243,55 @@ static void Flash5065Trace(const char* message)
     char* slash = strrchr(filename, '\\');
     if (!slash) return;
     strcpy_s(slash + 1, MAX_PATH - (slash + 1 - filename), "CLHook-5065.log");
-    FILE* file = NULL;
-    if (fopen_s(&file, filename, "a") == 0 && file) {
-        fprintf(file, "%lu %s\n", GetTickCount(), message);
-        fclose(file);
+    HANDLE file=CreateFileA(filename,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,
+        NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(file==INVALID_HANDLE_VALUE)return;
+    char line[640]={};
+    int length=sprintf_s(line,"%lu [tid=%lu] [hook] %s\r\n",GetTickCount(),
+        GetCurrentThreadId(),message);
+    DWORD written=0;
+    if(length>0)WriteFile(file,line,static_cast<DWORD>(length),&written,NULL);
+    CloseHandle(file);
+}
+
+static volatile LONG g_exceptionCount=0;
+static PVOID g_exceptionHandler=NULL;
+static LONG CALLBACK Flash5065ExceptionTrace(PEXCEPTION_POINTERS pointers) {
+    if(!pointers || !pointers->ExceptionRecord || !pointers->ContextRecord)
+        return EXCEPTION_CONTINUE_SEARCH;
+    DWORD code=pointers->ExceptionRecord->ExceptionCode;
+    if(code!=EXCEPTION_ACCESS_VIOLATION && code!=EXCEPTION_ILLEGAL_INSTRUCTION &&
+       code!=EXCEPTION_STACK_OVERFLOW)return EXCEPTION_CONTINUE_SEARCH;
+    LONG count=InterlockedIncrement(&g_exceptionCount);
+    if(count<=12) {
+        void* address=pointers->ExceptionRecord->ExceptionAddress;
+        MEMORY_BASIC_INFORMATION memory={}; char module[MAX_PATH]="unknown";
+        if(VirtualQuery(address,&memory,sizeof(memory)) && memory.AllocationBase)
+            GetModuleFileNameA(reinterpret_cast<HMODULE>(memory.AllocationBase),module,MAX_PATH);
+        char state[640]={};
+        sprintf_s(state,"EXCEPTION code=0x%08lX address=0x%p EIP=0x%08lX ESP=0x%08lX EBP=0x%08lX module=%s flash-stage=%s",
+            code,address,pointers->ContextRecord->Eip,pointers->ContextRecord->Esp,
+            pointers->ContextRecord->Ebp,module,CFlashFix::StageName());
+        Flash5065Trace(state);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+static void Install5065ExceptionDiagnostics() {
+    if(!g_exceptionHandler) {
+        g_exceptionHandler=AddVectoredExceptionHandler(1,Flash5065ExceptionTrace);
+        Flash5065Trace(g_exceptionHandler ? "Vectored crash diagnostics installed." :
+            "ERROR: vectored crash diagnostics could not be installed.");
     }
 }
-static DWORD WINAPI Deferred5065ConnectHook(LPVOID)
-{
-    Flash5065Trace("Deferred network hook started; waiting for ws2_32.dll.");
-    for (int attempt = 0; attempt < 300; ++attempt) {
-        HMODULE winsock = GetModuleHandleA("ws2_32.dll");
-        LPVOID connectAddress = winsock ? GetProcAddress(winsock, "connect") : NULL;
-        if (connectAddress) {
-            // No other network hooks are installed in 5065 mode.
-            // The game starts disconnected, so it is safe to wait for imports.
-            CreateHook32(connectAddress, csv3_connect, &connect_stub);
-            Flash5065Trace("Deferred connect hook installed successfully.");
-            return 0;
-        }
-        Sleep(50);
-    }
-    Flash5065Trace("ERROR: ws2_32/connect was not available within 15 seconds.");
-    return 1;
+
+static DWORD WINAPI Flash5065Preflight(LPVOID) {
+    Flash5065Trace("Flash preflight worker running outside loader lock.");
+    HRESULT hr=CFlashFix::PreflightLocalControl();
+    char state[128]={};
+    sprintf_s(state,"Flash preflight finished with HRESULT=0x%08lX.",
+        static_cast<unsigned long>(hr));
+    Flash5065Trace(state);
+    return SUCCEEDED(hr)?0:1;
 }
 
 // Native 5065 still needs the legacy login packet adaptation used by Redux:
@@ -273,9 +299,9 @@ static DWORD WINAPI Deferred5065ConnectHook(LPVOID)
 // and send places it in the legacy encrypted packet. Install all three only
 // after the CRT and Winsock imports exist, and use Detours trampolines instead
 // of the unsafe five-byte CreateHook32 implementation.
-static DWORD WINAPI Deferred5065NativeProtocolHooks(LPVOID)
+static DWORD WINAPI Deferred5065ProtocolHooks(LPVOID)
 {
-    Flash5065Trace("Native protocol hook worker started.");
+    Flash5065Trace("Redux 5065 protocol hook worker started.");
     for (int attempt = 0; attempt < 300; ++attempt) {
         HMODULE winsock = GetModuleHandleA("ws2_32.dll");
         HMODULE crt = GetModuleHandleA("msvcr90.dll");
@@ -294,12 +320,12 @@ static DWORD WINAPI Deferred5065NativeProtocolHooks(LPVOID)
             LONG committed = (a == NO_ERROR && b == NO_ERROR && c == NO_ERROR)
                 ? DetourTransactionCommit() : DetourTransactionAbort();
             if (committed == NO_ERROR) {
-                Flash5065Trace("Native connect/send/password hooks installed successfully.");
+                Flash5065Trace("Redux connect/send/password hooks installed successfully.");
                 return 0;
             }
             native5065_connect = NULL;
             native5065_send = NULL;
-            Flash5065Trace("ERROR: Detours rejected native protocol hooks.");
+            Flash5065Trace("ERROR: Detours rejected Redux protocol hooks.");
             return 1;
         }
         Sleep(50);
@@ -342,12 +368,13 @@ void csv3_init(HMODULE hModule)
     bool flashless = ClientVersion == 5065 &&
         GetPrivateProfileIntA(HeaderConfig, "FLASHLESS_NATIVE_LOGIN", 0, szConfig) == 1;
     if (flashless) {
+        Install5065ExceptionDiagnostics();
         if (!EnableFlashless5065(hModule)) {
             MessageBoxA(NULL, "El cliente no coincide con Conquer.exe 5065 compatible. No se modifico el juego.",
                 "Redux - login sin Flash", MB_OK | MB_ICONERROR);
 			return;
         }
-		HANDLE worker = CreateThread(NULL, 0, Deferred5065NativeProtocolHooks, NULL, 0, NULL);
+		HANDLE worker = CreateThread(NULL, 0, Deferred5065ProtocolHooks, NULL, 0, NULL);
 		if (worker) CloseHandle(worker);
 		else Flash5065Trace("ERROR: native protocol worker could not be created.");
 		return;
@@ -363,6 +390,7 @@ void csv3_init(HMODULE hModule)
         : 0;
     if (diagnosticMode < 0 || diagnosticMode > 3) diagnosticMode = 1;
     if (earlyFlash5065) {
+        Install5065ExceptionDiagnostics();
         char state[96] = {};
         sprintf_s(state, "Early 5065 hook entry. Diagnostic mode=%d.", diagnosticMode);
         Flash5065Trace(state);
@@ -371,9 +399,16 @@ void csv3_init(HMODULE hModule)
     if (!flashless && ClientVersion <= 6186 && !DisableAutoFixFlash) {
         if (!earlyFlash5065 || diagnosticMode < 3) {
             if (earlyFlash5065) Flash5065Trace("Installing Flash detour...");
-            CFlashFix flash;
-            flash.Hook(!earlyFlash5065 || diagnosticMode < 2);
-            if (earlyFlash5065) Flash5065Trace("Flash detour installation returned.");
+            HRESULT flashHook=CFlashFix::Hook(!earlyFlash5065 || diagnosticMode < 2);
+            char flashState[128]={};
+            sprintf_s(flashState,"Flash detour installation returned HRESULT=0x%08lX.",
+                static_cast<unsigned long>(flashHook));
+            if (earlyFlash5065) Flash5065Trace(flashState);
+            if(SUCCEEDED(flashHook)) {
+                HANDLE preflight=CreateThread(NULL,0,Flash5065Preflight,NULL,0,NULL);
+                if(preflight)CloseHandle(preflight);
+                else Flash5065Trace("ERROR: failed to start Flash preflight thread.");
+            }
         } else Flash5065Trace("All Flash hooks disabled for isolation.");
     }
 
@@ -382,7 +417,7 @@ void csv3_init(HMODULE hModule)
     if (earlyFlash5065) {
         if (diagnosticMode == 0) {
             Flash5065Trace("Installing network hook on deferred thread.");
-            HANDLE worker = CreateThread(NULL, 0, Deferred5065ConnectHook, NULL, 0, NULL);
+            HANDLE worker = CreateThread(NULL, 0, Deferred5065ProtocolHooks, NULL, 0, NULL);
             if (worker) CloseHandle(worker);
             else Flash5065Trace("ERROR: failed to start deferred network hook thread.");
         } else {
@@ -459,4 +494,13 @@ void csv3_init(HMODULE hModule)
 		CreateHook32(lib_func("ws2_32.dll", "send"), csv3_send, &send_stub);
 	}
 	CreateHook32(lib_func("ws2_32.dll", "connect"), csv3_connect, &connect_stub);
+}
+
+void csv3_shutdown()
+{
+    if(g_exceptionHandler) {
+        RemoveVectoredExceptionHandler(g_exceptionHandler);
+        g_exceptionHandler=NULL;
+    }
+    SecureZeroMemory(szPassword,sizeof(szPassword));
 }

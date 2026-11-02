@@ -341,16 +341,15 @@ redirige `LoadRegTypeLib` y `QueryPathOfRegTypeLib` para el LIBID
 `{D27CDB6B-AE6D-11CF-96B8-444553540000}` y usa `LoadTypeLibEx` con
 `REGKIND_NONE`; no escribe esa typelib en el registro global.
 
-## Resolución de CRT y red del cliente 5065
+## Hooks de red del cliente 5065
 
-El protocolo ya no supone que el cliente use `msvcr90.dll`. En ejecución,
-CLHook recorre el directorio de imports PE de `Conquer.exe`, identifica la DLL
-real que exporta `_snprintf`/`snprintf` y resuelve también `connect` y `send`.
-El log muestra módulo, función, dirección y resultado individual de cada
-detour. Una instalación correcta todavía no significa conexión correcta:
-`connect` registra origen, destino Redux configurado y el peer obtenido con
-`getpeername`; el primer `send` de autenticación registra, sin contraseña, si
-se completaron descifrado, inserción y cifrado legacy.
+CLHook recorre el directorio de imports PE de `Conquer.exe` y resuelve
+únicamente `connect` y `send`. El perfil 5065 no instala un Detour global de
+`_snprintf`/`snprintf`: el cliente ya genera el paquete AccountEx correcto de
+52 bytes y el hook lo reenvía sin leer ni modificar sus campos. El log muestra
+módulo, función, dirección, resultado individual de cada detour, destino real
+obtenido con `getpeername` y longitud de cada envío. Ver la auditoría completa
+en `REDUX_5065_PROTOCOL_AUDIT.md`.
 
 
 ## Crash aislado por etapas — ExitCode 0xC0000005

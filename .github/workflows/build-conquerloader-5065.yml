@@ -51,6 +51,7 @@ jobs:
           ./tests/Test-FlashCom5065.ps1
           ./tests/Test-FlashDiagnostics5065.ps1
           ./tests/Test-ProtocolHooks5065.ps1
+          ./tests/Test-ProtocolPackets5065.ps1
       - name: Verify staged Flash diagnostic behavior
         shell: pwsh
         run: |

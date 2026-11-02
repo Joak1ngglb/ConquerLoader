@@ -13,6 +13,7 @@
 #include <time.h>
 //
 #include <cstdio>
+#include <intrin.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include "CFlashFix.h"
@@ -40,15 +41,26 @@ typedef int (__stdcall *ConnectProc)(SOCKET,sockaddr_in*,int);
 typedef int (__stdcall *SendProc)(SOCKET,PBYTE,int,int);
 ConnectProc native5065_connect = NULL;
 SendProc native5065_send = NULL;
-PVOID protocol5065_snprintf = NULL;
 SOCKET g_loginSocket = INVALID_SOCKET;
+SOCKET g_gameSocket = INVALID_SOCKET;
 sockaddr_in g_expectedLogin = {};
+sockaddr_in g_expectedGame = {};
+__declspec(thread) LONG g_sendHookDepth = 0;
 PBYTE handler_stub;
 CLegacyCipher* legacy;
 int ClientVersion = 0, EnableHostName = 0, UpdatedIPS = 0, DisableAutoFixFlash = 0;
 BYTE patternDynamic = 0x4F;
 char HostName[32] = "";
 LPCSTR HeaderConfig = "CLHook";
+// Redux/Packets/Login/[1086]Account.cs consumes exactly this 52-byte
+// AccountEx layout after the server decrypts the transport stream. The hook
+// intentionally does not inspect these credential fields.
+struct ReduxAccountLayout5065 {
+	enum { Size=52, AccountOffset=4, PasswordRc5Offset=20, ServerOffset=36, FieldSize=16 };
+};
+struct ReduxGameConnect5065 { enum { Size=28, Type=1052 }; };
+static_assert(ReduxAccountLayout5065::ServerOffset + ReduxAccountLayout5065::FieldSize ==
+	ReduxAccountLayout5065::Size, "Redux AccountEx layout must remain 52 bytes");
 // Variables of Settings from .ini file
 char ServerName[16] = "ConquerOnline";
 int ServerNameMemoryAddress = 0x005726DC;
@@ -160,9 +172,14 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 		name->sin_port = htons(nPortDecrypt);
 		redirected=true; route="login";
 		g_loginSocket=s; g_expectedLogin=*name;
-		if(legacy){delete legacy;legacy=NULL;}
-		legacy = new CLegacyCipher();
-		legacy->GenerateIV(0x13FA0F9D, 0x6D5C7962);
+		// The 5065 client already builds the AccountEx packet and applies both
+		// RC5 password protection and the auth transport cipher. Mutating it here
+		// corrupts its wire format. Keep the old adapter only for older profiles.
+		if(ClientVersion!=5065) {
+			if(legacy){delete legacy;legacy=NULL;}
+			legacy = new CLegacyCipher();
+			legacy->GenerateIV(0x13FA0F9D, 0x6D5C7962);
+		}
 	}
 	else if (rPort == 5816)
 	{
@@ -178,6 +195,7 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 		name->sin_addr.s_addr = configuredAddress;
 		name->sin_port = htons(nPortDecrypt);
 		redirected=true; route="game";
+		g_gameSocket=s; g_expectedGame=*name;
 	}
 
 	//Servername Changer By DaRkFox
@@ -212,7 +230,31 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 }
 int __stdcall csv3_send(SOCKET s, PBYTE buf, int len, int flags)
 {
-	if (legacy && s == g_loginSocket)
+	LONG depth=++g_sendHookDepth;
+	DWORD_PTR stackMarkerBefore=reinterpret_cast<DWORD_PTR>(_AddressOfReturnAddress());
+	if(ClientVersion==5065)
+	{
+		char wireLog[320]={};
+		sockaddr_in peer={}; int peerLength=sizeof(peer);
+		bool peerRead=getpeername(s,reinterpret_cast<sockaddr*>(&peer),&peerLength)==0;
+		const char* route="other"; const sockaddr_in* expected=NULL;
+		if(s==g_loginSocket){route="login";expected=&g_expectedLogin;}
+		else if(s==g_gameSocket){route="game";expected=&g_expectedGame;}
+		bool verified=peerRead && expected && peer.sin_addr.s_addr==expected->sin_addr.s_addr &&
+			peer.sin_port==expected->sin_port;
+		char peerIp[32]="unavailable"; int peerPort=0;
+		if(peerRead){strcpy_s(peerIp,inet_ntoa(peer.sin_addr));peerPort=ntohs(peer.sin_port);}
+		sprintf_s(wireLog,"send entry route=%s peer=%s:%d verified=%s length=%d depth=%ld; payload is read-only.",
+			route,peerIp,peerPort,verified?"yes":"NO",len,depth);
+		Flash5065Trace(wireLog);
+		if(s==g_loginSocket && len==ReduxAccountLayout5065::Size)
+			Flash5065Trace("Redux AccountEx candidate: 52-byte encrypted payload forwarded byte-for-byte; account@4, RC5 password@20 and server@36 were not read or modified.");
+		else if(s==g_gameSocket && len==ReduxGameConnect5065::Size)
+			Flash5065Trace("Redux MsgConnect(1052) candidate: 28-byte game payload forwarded byte-for-byte; type confirmation remains server-side because the game stream is encrypted.");
+		else if(s==g_loginSocket || s==g_gameSocket)
+			Flash5065Trace("Protocol send length does not match the expected 52-byte login or 28-byte game candidate for this route; forwarded unchanged.");
+	}
+	else if (legacy && s == g_loginSocket)
 	{
 		char authLog[256]={};
 		sockaddr_in peer={}; int peerLength=sizeof(peer);
@@ -255,11 +297,14 @@ int __stdcall csv3_send(SOCKET s, PBYTE buf, int len, int flags)
 	typedef int (__stdcall *LPFSEND)(SOCKET,PBYTE,int,int);
 	LPFSEND original = native5065_send ? native5065_send :
 		reinterpret_cast<LPFSEND>(send_stub.Address);
-	if(!original){Flash5065Trace("ERROR: send trampoline is NULL.");WSASetLastError(WSAEINVAL);return SOCKET_ERROR;}
+	if(!original){Flash5065Trace("ERROR: send trampoline is NULL.");WSASetLastError(WSAEINVAL);--g_sendHookDepth;return SOCKET_ERROR;}
 	int result=original(s,buf,len,flags);
 	int error=result==SOCKET_ERROR?WSAGetLastError():0;
-	char sendLog[128]={}; sprintf_s(sendLog,"send result=%d requested=%d WSAError=%d.",result,len,error);
+	DWORD_PTR stackMarkerAfter=reinterpret_cast<DWORD_PTR>(_AddressOfReturnAddress());
+	char sendLog[192]={}; sprintf_s(sendLog,"send result=%d requested=%d WSAError=%d depth=%ld stack-marker-stable=%s.",
+		result,len,error,depth,stackMarkerBefore==stackMarkerAfter?"yes":"NO");
 	Flash5065Trace(sendLog);
+	--g_sendHookDepth;
 	if(result==SOCKET_ERROR)WSASetLastError(error);
 	return result;
 }
@@ -324,9 +369,11 @@ static void Flash5065Trace(const char* message)
     HANDLE file=CreateFileA(filename,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,
         NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
     if(file==INVALID_HANDLE_VALUE)return;
-    char line[640]={};
-    int length=sprintf_s(line,"%lu [tid=%lu] [hook] %s\r\n",GetTickCount(),
-        GetCurrentThreadId(),message);
+    // Avoid the CRT here: this logger is also used while diagnosing faults
+    // whose instruction pointer is inside MSVCRT.
+    char line[1024]={};
+    int length=wsprintfA(line,"%lu [tid=%lu] [hook] %s\r\n",GetTickCount(),
+        GetCurrentThreadId(),message ? message : "(null)");
     DWORD written=0;
     if(length>0)WriteFile(file,line,static_cast<DWORD>(length),&written,NULL);
     CloseHandle(file);
@@ -336,6 +383,58 @@ static volatile LONG g_exceptionCount=0;
 static PVOID g_exceptionHandler=NULL;
 static HANDLE g_protocolReadyEvent=NULL;
 static HANDLE g_protocolFailedEvent=NULL;
+static bool ReadDword5065(DWORD address,DWORD& value) {
+    MEMORY_BASIC_INFORMATION memory={};
+    if(!address || !VirtualQuery(reinterpret_cast<LPCVOID>(address),&memory,sizeof(memory)) ||
+       memory.State!=MEM_COMMIT || (memory.Protect&(PAGE_GUARD|PAGE_NOACCESS)))return false;
+    DWORD_PTR end=reinterpret_cast<DWORD_PTR>(memory.BaseAddress)+memory.RegionSize;
+    if(static_cast<DWORD_PTR>(address)+sizeof(DWORD)>end)return false;
+    __try { value=*reinterpret_cast<DWORD*>(address); return true; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static bool ExecutableAddress5065(DWORD address) {
+    MEMORY_BASIC_INFORMATION memory={};
+    if(!address || !VirtualQuery(reinterpret_cast<LPCVOID>(address),&memory,sizeof(memory)) ||
+       memory.State!=MEM_COMMIT || (memory.Protect&(PAGE_GUARD|PAGE_NOACCESS)))return false;
+    DWORD protection=memory.Protect&0xff;
+    return protection==PAGE_EXECUTE || protection==PAGE_EXECUTE_READ ||
+        protection==PAGE_EXECUTE_READWRITE || protection==PAGE_EXECUTE_WRITECOPY;
+}
+static void LogCodeAddress5065(const char* kind,unsigned index,DWORD address) {
+    MEMORY_BASIC_INFORMATION memory={}; char module[MAX_PATH]="unknown"; DWORD offset=0;
+    if(VirtualQuery(reinterpret_cast<LPCVOID>(address),&memory,sizeof(memory)) && memory.AllocationBase) {
+        GetModuleFileNameA(reinterpret_cast<HMODULE>(memory.AllocationBase),module,MAX_PATH);
+        offset=address-static_cast<DWORD>(reinterpret_cast<DWORD_PTR>(memory.AllocationBase));
+    }
+    char line[640]={};
+    wsprintfA(line,"crash-stack %s[%u]=0x%08lX module=%s+0x%08lX.",kind,index,address,module,offset);
+    Flash5065Trace(line);
+}
+static void LogExceptionStack5065(const CONTEXT* context) {
+    if(!context)return;
+    LogCodeAddress5065("eip",0,context->Eip);
+    DWORD frame=context->Ebp;
+    for(unsigned index=0;index<12;index++) {
+        DWORD next=0,returnAddress=0;
+        if(frame<context->Esp || frame-context->Esp>0x100000 || (frame&3) ||
+           !ReadDword5065(frame,next) || !ReadDword5065(frame+4,returnAddress)) {
+            char state[160]={}; wsprintfA(state,"crash-stack EBP chain stopped at frame=0x%08lX index=%u (invalid/unreadable).",frame,index);
+            Flash5065Trace(state); break;
+        }
+        LogCodeAddress5065("ebp-return",index,returnAddress);
+        if(next<=frame || next-frame>0x100000) {
+            char state[160]={}; wsprintfA(state,"crash-stack EBP chain corrupt/non-monotonic current=0x%08lX next=0x%08lX.",frame,next);
+            Flash5065Trace(state); break;
+        }
+        frame=next;
+    }
+    unsigned found=0;
+    for(unsigned slot=0;slot<64 && found<12;slot++) {
+        DWORD candidate=0;
+        if(ReadDword5065(context->Esp+slot*sizeof(DWORD),candidate) && ExecutableAddress5065(candidate))
+            LogCodeAddress5065("esp-code",found++,candidate);
+    }
+}
 static void PublishProtocolOutcome(bool ready) {
     wchar_t name[96]={};
     swprintf_s(name,L"Local\\ConquerLoader-Protocol5065-%s-%lu",
@@ -359,10 +458,11 @@ static LONG CALLBACK Flash5065ExceptionTrace(PEXCEPTION_POINTERS pointers) {
         if(VirtualQuery(address,&memory,sizeof(memory)) && memory.AllocationBase)
             GetModuleFileNameA(reinterpret_cast<HMODULE>(memory.AllocationBase),module,MAX_PATH);
         char state[640]={};
-        sprintf_s(state,"EXCEPTION code=0x%08lX address=0x%p EIP=0x%08lX ESP=0x%08lX EBP=0x%08lX module=%s flash-stage=%s",
-            code,address,pointers->ContextRecord->Eip,pointers->ContextRecord->Esp,
+        wsprintfA(state,"EXCEPTION code=0x%08lX address=0x%08lX EIP=0x%08lX ESP=0x%08lX EBP=0x%08lX module=%s flash-stage=%s",
+            code,static_cast<DWORD>(reinterpret_cast<DWORD_PTR>(address)),pointers->ContextRecord->Eip,pointers->ContextRecord->Esp,
             pointers->ContextRecord->Ebp,module,CFlashFix::StageName());
         Flash5065Trace(state);
+        LogExceptionStack5065(pointers->ContextRecord);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -384,11 +484,9 @@ static DWORD WINAPI Flash5065Preflight(LPVOID) {
     return SUCCEEDED(hr)?0:1;
 }
 
-// Native 5065 still needs the legacy login packet adaptation used by Redux:
-// connect redirects the configured endpoints, snprintf captures the password,
-// and send places it in the legacy encrypted packet. Install all three only
-// after the CRT and Winsock imports exist, and use Detours trampolines instead
-// of the unsafe five-byte CreateHook32 implementation.
+// The original 5065 client already builds Redux's 52-byte AccountEx packet.
+// Only redirect and observe Winsock. In particular, never detour a process-wide
+// varargs CRT function: doing so risks recursion and cdecl stack corruption.
 struct ImportedFunction5065 {
     PVOID address;
     char module[64];
@@ -493,47 +591,41 @@ static DWORD WINAPI Deferred5065ProtocolHooks(LPVOID)
     for (int attempt = 0; attempt < 300; ++attempt) {
         ImportedFunction5065 connectTarget=ResolveMainImport("connect");
         ImportedFunction5065 sendTarget=ResolveMainImport("send");
-        ImportedFunction5065 snprintfTarget=ResolveMainImport("_snprintf");
-        if(!snprintfTarget.address)snprintfTarget=ResolveMainImport("snprintf");
         if(attempt==0 || attempt%20==0) {
             LogResolvedFunction("connect",connectTarget);
             LogResolvedFunction("send",sendTarget);
-            LogResolvedFunction("_snprintf/snprintf",snprintfTarget);
         }
-        if (connectTarget.address && sendTarget.address && snprintfTarget.address) {
+        if (connectTarget.address && sendTarget.address) {
             native5065_connect = reinterpret_cast<ConnectProc>(connectTarget.address);
             native5065_send = reinterpret_cast<SendProc>(sendTarget.address);
-            protocol5065_snprintf = snprintfTarget.address;
             LONG transaction=DetourTransactionBegin();
             LONG update=transaction==NO_ERROR?DetourUpdateThread(GetCurrentThread()):transaction;
             LONG a=update==NO_ERROR?DetourAttach(reinterpret_cast<PVOID*>(&native5065_connect),csv3_connect):update;
             LONG b=a==NO_ERROR?DetourAttach(reinterpret_cast<PVOID*>(&native5065_send),csv3_send):a;
-            LONG c=b==NO_ERROR?DetourAttach(&protocol5065_snprintf,csv3_snprintf):b;
             char hookLog[256]={};
-            sprintf_s(hookLog,"Detour statuses transaction=%ld updateThread=%ld connect=%ld send=%ld snprintf=%ld.",
-                transaction,update,a,b,c);
+            sprintf_s(hookLog,"Detour statuses transaction=%ld updateThread=%ld connect=%ld send=%ld; CRT detour=disabled.",
+                transaction,update,a,b);
             Flash5065Trace(hookLog);
             bool allAttached=transaction==NO_ERROR && update==NO_ERROR &&
-                a==NO_ERROR && b==NO_ERROR && c==NO_ERROR;
+                a==NO_ERROR && b==NO_ERROR;
             LONG committed = allAttached ? DetourTransactionCommit() : DetourTransactionAbort();
             sprintf_s(hookLog,"Protocol DetourTransaction action=%s result=%ld.",
                 allAttached?"commit":"abort",committed);
             Flash5065Trace(hookLog);
             if (allAttached && committed == NO_ERROR) {
-                Flash5065Trace("Redux connect/send/CRT password hooks installed successfully; connection is not yet verified until connect/getpeername and authentication send logs succeed.");
+                Flash5065Trace("Redux connect/send hooks installed; global CRT detour is disabled and authentication payloads are pass-through.");
                 PublishProtocolOutcome(true);
                 return 0;
             }
             native5065_connect = NULL;
             native5065_send = NULL;
-            protocol5065_snprintf = NULL;
             Flash5065Trace("ERROR: Detours rejected Redux protocol hooks.");
             PublishProtocolOutcome(false);
             return 1;
         }
         Sleep(50);
     }
-    Flash5065Trace("ERROR: connect, send or the CRT snprintf import from Conquer.exe remained unresolved after 15 seconds.");
+    Flash5065Trace("ERROR: connect or send import from Conquer.exe remained unresolved after 15 seconds.");
     PublishProtocolOutcome(false);
     return 1;
 }
@@ -634,6 +726,16 @@ void csv3_init(HMODULE hModule)
         return;
     }
 
+    // Even if a hand-written configuration omits EARLY_FLASH5065, never send
+    // this exact protocol through the legacy global _snprintf hook below.
+    if(ClientVersion==5065) {
+        Flash5065Trace("5065 fallback: installing Winsock-only protocol hooks; CRT detour remains disabled.");
+        HANDLE worker=CreateThread(NULL,0,Deferred5065ProtocolHooks,NULL,0,NULL);
+        if(worker)CloseHandle(worker);
+        else {Flash5065Trace("ERROR: failed to start 5065 fallback protocol worker.");PublishProtocolOutcome(false);}
+        return;
+    }
+
 	if (ClientVersion >= 5600) {
 		//
 		//	hook packet processor
@@ -712,5 +814,6 @@ void csv3_shutdown()
     }
     if(g_protocolReadyEvent){CloseHandle(g_protocolReadyEvent);g_protocolReadyEvent=NULL;}
     if(g_protocolFailedEvent){CloseHandle(g_protocolFailedEvent);g_protocolFailedEvent=NULL;}
+    g_loginSocket=INVALID_SOCKET; g_gameSocket=INVALID_SOCKET;
     SecureZeroMemory(szPassword,sizeof(szPassword));
 }

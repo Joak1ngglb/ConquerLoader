@@ -190,46 +190,66 @@ namespace ConquerLoader.Models
                         "La inyeccion APC no cargo CLHook.dll antes de iniciar el juego; se cancelo la prueba.");
 
                 log("CLHook.dll confirmado dentro de Conquer.exe; inicio temprano completado.");
-                if (requireFlashReady)
+                // Hook presence is not enough: wait for protocol hooks in every
+                // 5065 mode, and for ActiveX readiness in Flash mode. Neither
+                // event claims that a server connection or login succeeded.
                 {
-                    string readyName = "Local\\ConquerLoader-Flash5065-Ready-" + info.processId;
-                    string failedName = "Local\\ConquerLoader-Flash5065-Failed-" + info.processId;
-                    IntPtr readyEvent = IntPtr.Zero;
-                    IntPtr failedEvent = IntPtr.Zero;
-                    bool flashReady = false;
+                    string flashReadyName = "Local\\ConquerLoader-Flash5065-Ready-" + info.processId;
+                    string flashFailedName = "Local\\ConquerLoader-Flash5065-Failed-" + info.processId;
+                    string protocolReadyName = "Local\\ConquerLoader-Protocol5065-Ready-" + info.processId;
+                    string protocolFailedName = "Local\\ConquerLoader-Protocol5065-Failed-" + info.processId;
+                    IntPtr flashReadyEvent = IntPtr.Zero;
+                    IntPtr flashFailedEvent = IntPtr.Zero;
+                    IntPtr protocolReadyEvent = IntPtr.Zero;
+                    IntPtr protocolFailedEvent = IntPtr.Zero;
+                    bool flashReady = !requireFlashReady;
+                    bool protocolReady = false;
                     watch.Restart();
                     try
                     {
-                        while (watch.ElapsedMilliseconds < 12000 && !process.HasExited)
+                        while (watch.ElapsedMilliseconds < 18000 && !process.HasExited)
                         {
-                            if (readyEvent == IntPtr.Zero)
-                                readyEvent = OpenEvent(Synchronize, false, readyName);
-                            if (failedEvent == IntPtr.Zero)
-                                failedEvent = OpenEvent(Synchronize, false, failedName);
-                            if (failedEvent != IntPtr.Zero &&
-                                WaitForSingleObject(failedEvent, 0) == WaitObject0)
+                            if (requireFlashReady && flashReadyEvent == IntPtr.Zero)
+                                flashReadyEvent = OpenEvent(Synchronize, false, flashReadyName);
+                            if (requireFlashReady && flashFailedEvent == IntPtr.Zero)
+                                flashFailedEvent = OpenEvent(Synchronize, false, flashFailedName);
+                            if (protocolReadyEvent == IntPtr.Zero)
+                                protocolReadyEvent = OpenEvent(Synchronize, false, protocolReadyName);
+                            if (protocolFailedEvent == IntPtr.Zero)
+                                protocolFailedEvent = OpenEvent(Synchronize, false, protocolFailedName);
+                            if (flashFailedEvent != IntPtr.Zero &&
+                                WaitForSingleObject(flashFailedEvent, 0) == WaitObject0)
                                 throw new InvalidOperationException(
                                     "La activacion local de Flash fallo. Revisar la ultima etapa y HRESULT en CLHook-5065.log.");
-                            if (readyEvent != IntPtr.Zero &&
-                                WaitForSingleObject(readyEvent, 0) == WaitObject0)
-                            {
+                            if (protocolFailedEvent != IntPtr.Zero &&
+                                WaitForSingleObject(protocolFailedEvent, 0) == WaitObject0)
+                                throw new InvalidOperationException(
+                                    "No se pudieron instalar los hooks de protocolo 5065. Revisar modulos/imports en CLHook-5065.log.");
+                            if (flashReadyEvent != IntPtr.Zero &&
+                                WaitForSingleObject(flashReadyEvent, 0) == WaitObject0)
                                 flashReady = true;
-                                break;
-                            }
+                            if (protocolReadyEvent != IntPtr.Zero &&
+                                WaitForSingleObject(protocolReadyEvent, 0) == WaitObject0)
+                                protocolReady = true;
+                            if (flashReady && protocolReady) break;
                             Thread.Sleep(50);
                             process.Refresh();
                         }
                     }
                     finally
                     {
-                        if (readyEvent != IntPtr.Zero) CloseHandle(readyEvent);
-                        if (failedEvent != IntPtr.Zero) CloseHandle(failedEvent);
+                        if (flashReadyEvent != IntPtr.Zero) CloseHandle(flashReadyEvent);
+                        if (flashFailedEvent != IntPtr.Zero) CloseHandle(flashFailedEvent);
+                        if (protocolReadyEvent != IntPtr.Zero) CloseHandle(protocolReadyEvent);
+                        if (protocolFailedEvent != IntPtr.Zero) CloseHandle(protocolFailedEvent);
                     }
-                    if (!flashReady)
+                    if (!flashReady || !protocolReady)
                         throw new InvalidOperationException(
-                            "CLHook.dll cargo, pero Flash.ocx no publico una class factory lista en 12 segundos. " +
+                            "CLHook.dll cargo, pero Flash/protocolo no quedaron listos en 18 segundos. " +
                             "Revisar CLHook-5065.log.");
-                    log("Flash.ocx local x86 y DllGetClassObject verificados; activacion COM sin registro lista.");
+                    if (requireFlashReady)
+                        log("Flash.ocx local y ActiveX verificados; activacion COM sin registro lista.");
+                    log("Hooks de protocolo 5065 instalados. Destino Redux y autenticacion se verificaran al conectar/enviar, no en esta etapa.");
                 }
                 // A loaded DLL does not mean Conquer.exe reached its main window.
                 // Detect immediate fatal exits instead of showing 100% as success.

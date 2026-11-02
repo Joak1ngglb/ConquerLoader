@@ -40,6 +40,9 @@ typedef int (__stdcall *ConnectProc)(SOCKET,sockaddr_in*,int);
 typedef int (__stdcall *SendProc)(SOCKET,PBYTE,int,int);
 ConnectProc native5065_connect = NULL;
 SendProc native5065_send = NULL;
+PVOID protocol5065_snprintf = NULL;
+SOCKET g_loginSocket = INVALID_SOCKET;
+sockaddr_in g_expectedLogin = {};
 PBYTE handler_stub;
 CLegacyCipher* legacy;
 int ClientVersion = 0, EnableHostName = 0, UpdatedIPS = 0, DisableAutoFixFlash = 0;
@@ -79,6 +82,10 @@ int csv3_snprintf(char* str, int len, const char* format, ...)
 		char* password = va_arg(args, PCHAR);
 		if (!password) password = "";
 		strcpy_s(szPassword, sizeof(szPassword), password);
+		char capture[128]={};
+		sprintf_s(capture,"Authentication password captured by CRT hook (length=%u, value redacted).",
+			static_cast<unsigned>(strnlen_s(szPassword,sizeof(szPassword))));
+		Flash5065Trace(capture);
 		if (strcpy_s(str, len, password) != 0 || strcat_s(str, len, &tqFormat[2]) != 0)
 			result = -1;
 		else
@@ -98,6 +105,20 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 {
 	char szIPAddress[32], szPortAddress[32];
 	int rPort;
+	typedef int (__stdcall *LPFCONNECT)(SOCKET,sockaddr_in*,int);
+	LPFCONNECT original = native5065_connect ? native5065_connect :
+		reinterpret_cast<LPFCONNECT>(connect_stub.Address);
+	if(!original || !name || len < static_cast<int>(sizeof(sockaddr_in)) ||
+	   name->sin_family != AF_INET) {
+		Flash5065Trace("ERROR: connect hook received invalid target/original trampoline.");
+		WSASetLastError(WSAEINVAL);
+		return SOCKET_ERROR;
+	}
+	char originalIp[32]={};
+	strcpy_s(originalIp,inet_ntoa(name->sin_addr));
+	int originalPort=ntohs(name->sin_port);
+	bool redirected=false;
+	const char* route="passthrough";
 
 	//END - Get hostname by ip
 	EnableHostName = GetPrivateProfileIntA(HeaderConfig, "ENABLE_HOSTNAME", 0, szConfig);
@@ -123,15 +144,23 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 		//
 	}
 
-	rPort = ntohs(name->sin_port);
+	rPort = originalPort;
 	if (rPort >= 9950 && rPort <= 9970)
 	{
 		/* START - NO Encrypted Connection */
 		GetPrivateProfileStringA(HeaderConfig, "HOST", "", szIPAddress, 32, szConfig);
 		GetPrivateProfileStringA(HeaderConfig, "PORT", "9958", szPortAddress, 32, szConfig);
-		name->sin_addr.s_addr = inet_addr(szIPAddress);
+		DWORD configuredAddress=inet_addr(szIPAddress);
 		int nPortDecrypt = atoi(szPortAddress);
+		if(configuredAddress==INADDR_NONE || nPortDecrypt<1 || nPortDecrypt>65535) {
+			Flash5065Trace("ERROR: invalid Redux login HOST/PORT in CLHook.ini.");
+			WSASetLastError(WSAEINVAL); return SOCKET_ERROR;
+		}
+		name->sin_addr.s_addr = configuredAddress;
 		name->sin_port = htons(nPortDecrypt);
+		redirected=true; route="login";
+		g_loginSocket=s; g_expectedLogin=*name;
+		if(legacy){delete legacy;legacy=NULL;}
 		legacy = new CLegacyCipher();
 		legacy->GenerateIV(0x13FA0F9D, 0x6D5C7962);
 	}
@@ -140,9 +169,15 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 		/*	NO Encrypted Connection	*/
 		GetPrivateProfileStringA(HeaderConfig, "GAMEHOST", "", szIPAddress, 32, szConfig);
 		GetPrivateProfileStringA(HeaderConfig, "GAMEPORT", "5816", szPortAddress,32, szConfig);
-		name->sin_addr.s_addr = inet_addr(szIPAddress);
+		DWORD configuredAddress=inet_addr(szIPAddress);
 		int nPortDecrypt = atoi(szPortAddress);
+		if(configuredAddress==INADDR_NONE || nPortDecrypt<1 || nPortDecrypt>65535) {
+			Flash5065Trace("ERROR: invalid Redux game GAMEHOST/GAMEPORT in CLHook.ini.");
+			WSASetLastError(WSAEINVAL); return SOCKET_ERROR;
+		}
+		name->sin_addr.s_addr = configuredAddress;
 		name->sin_port = htons(nPortDecrypt);
+		redirected=true; route="game";
 	}
 
 	//Servername Changer By DaRkFox
@@ -153,37 +188,80 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 	}
 	//END Servername Changer
 
-	typedef int (__stdcall *LPFCONNECT)(SOCKET,sockaddr_in*,int);
-	LPFCONNECT original = native5065_connect ? native5065_connect :
-		reinterpret_cast<LPFCONNECT>(connect_stub.Address);
-	return original ? original(s, name, len) : SOCKET_ERROR;
+	char targetIp[32]={}; strcpy_s(targetIp,inet_ntoa(name->sin_addr));
+	char redirectLog[256]={};
+	sprintf_s(redirectLog,"connect route=%s redirected=%s original=%s:%d target=%s:%d socket=%llu.",
+		route,redirected?"yes":"no",originalIp,originalPort,targetIp,ntohs(name->sin_port),
+		static_cast<unsigned long long>(s));
+	Flash5065Trace(redirectLog);
+	int result=original(s,name,len);
+	int error=result==SOCKET_ERROR?WSAGetLastError():0;
+	sockaddr_in peer={}; int peerLength=sizeof(peer);
+	if(result==0 && getpeername(s,reinterpret_cast<sockaddr*>(&peer),&peerLength)==0) {
+		char peerIp[32]={}; strcpy_s(peerIp,inet_ntoa(peer.sin_addr));
+		bool verified=peer.sin_addr.s_addr==name->sin_addr.s_addr && peer.sin_port==name->sin_port;
+		sprintf_s(redirectLog,"connect completed peer=%s:%d expected=%s:%d verified=%s.",
+			peerIp,ntohs(peer.sin_port),targetIp,ntohs(name->sin_port),verified?"yes":"NO");
+		Flash5065Trace(redirectLog);
+	} else {
+		sprintf_s(redirectLog,"connect result=%d WSAError=%d (destination not yet peer-verified).",result,error);
+		Flash5065Trace(redirectLog);
+	}
+	if(result==SOCKET_ERROR)WSASetLastError(error);
+	return result;
 }
 int __stdcall csv3_send(SOCKET s, PBYTE buf, int len, int flags)
 {
-	if (legacy)
+	if (legacy && s == g_loginSocket)
 	{
+		char authLog[256]={};
+		sockaddr_in peer={}; int peerLength=sizeof(peer);
+		bool peerRead=getpeername(s,reinterpret_cast<sockaddr*>(&peer),&peerLength)==0;
+		bool peerVerified=peerRead && s==g_loginSocket &&
+			peer.sin_addr.s_addr==g_expectedLogin.sin_addr.s_addr && peer.sin_port==g_expectedLogin.sin_port;
+		if(peerRead) {
+			char peerIp[32]={}; strcpy_s(peerIp,inet_ntoa(peer.sin_addr));
+			sprintf_s(authLog,"Authentication send peer=%s:%d Redux-target-verified=%s packetLength=%d.",
+				peerIp,ntohs(peer.sin_port),peerVerified?"yes":"NO",len);
+		} else sprintf_s(authLog,"Authentication send peer unavailable WSAError=%d packetLength=%d.",WSAGetLastError(),len);
+		Flash5065Trace(authLog);
 		legacy->Decrypt(buf, len);
 		const size_t fieldOffset = 4 + 4 + 64;
 		const size_t passwordLength = strnlen_s(szPassword, sizeof(szPassword));
-		if (buf && len > static_cast<int>(fieldOffset)) {
+		bool passwordPatched=false;
+		if (buf && len > static_cast<int>(fieldOffset) && passwordLength>0) {
 			size_t available = static_cast<size_t>(len) - fieldOffset;
 			size_t used = strnlen_s(reinterpret_cast<char*>(buf + fieldOffset), available);
 			if (used < available && passwordLength < available - used)
-				memcpy(buf + fieldOffset + used, szPassword, passwordLength + 1);
+				{memcpy(buf + fieldOffset + used, szPassword, passwordLength + 1);passwordPatched=true;}
 			else
 				Flash5065Trace("ERROR: password field did not fit in legacy login packet.");
 		}
+		else Flash5065Trace("ERROR: authentication password was not captured before send.");
 
 		legacy->Encrypt(buf, len);
+		sprintf_s(authLog,"Authentication packet legacy decrypt/patch/encrypt complete; passwordPatched=%s passwordLength=%u.",
+			passwordPatched?"yes":"NO",static_cast<unsigned>(passwordLength));
+		Flash5065Trace(authLog);
 		delete legacy;
 		legacy = NULL;
+	}
+	else if(legacy)
+	{
+		Flash5065Trace("send observed on a non-login socket; legacy authentication packet left untouched.");
 	}
 
 	// invoke old method
 	typedef int (__stdcall *LPFSEND)(SOCKET,PBYTE,int,int);
 	LPFSEND original = native5065_send ? native5065_send :
 		reinterpret_cast<LPFSEND>(send_stub.Address);
-	return original ? original(s,buf,len,flags) : SOCKET_ERROR;
+	if(!original){Flash5065Trace("ERROR: send trampoline is NULL.");WSASetLastError(WSAEINVAL);return SOCKET_ERROR;}
+	int result=original(s,buf,len,flags);
+	int error=result==SOCKET_ERROR?WSAGetLastError():0;
+	char sendLog[128]={}; sprintf_s(sendLog,"send result=%d requested=%d WSAError=%d.",result,len,error);
+	Flash5065Trace(sendLog);
+	if(result==SOCKET_ERROR)WSASetLastError(error);
+	return result;
 }
 int __stdcall csv3_shellexec(HWND hwnd, char* lpOperation, char* lpFile, char* lpParams, char* lpDir, int nCmd)
 {
@@ -256,6 +334,18 @@ static void Flash5065Trace(const char* message)
 
 static volatile LONG g_exceptionCount=0;
 static PVOID g_exceptionHandler=NULL;
+static HANDLE g_protocolReadyEvent=NULL;
+static HANDLE g_protocolFailedEvent=NULL;
+static void PublishProtocolOutcome(bool ready) {
+    wchar_t name[96]={};
+    swprintf_s(name,L"Local\\ConquerLoader-Protocol5065-%s-%lu",
+        ready?L"Ready":L"Failed",GetCurrentProcessId());
+    HANDLE& eventHandle=ready?g_protocolReadyEvent:g_protocolFailedEvent;
+    if(!eventHandle)eventHandle=CreateEventW(NULL,TRUE,FALSE,name);
+    if(eventHandle)SetEvent(eventHandle);
+    Flash5065Trace(ready ? "Protocol hook readiness event published; actual connection/authentication still pending runtime verification." :
+        "Protocol hook failure event published.");
+}
 static LONG CALLBACK Flash5065ExceptionTrace(PEXCEPTION_POINTERS pointers) {
     if(!pointers || !pointers->ExceptionRecord || !pointers->ContextRecord)
         return EXCEPTION_CONTINUE_SEARCH;
@@ -299,38 +389,152 @@ static DWORD WINAPI Flash5065Preflight(LPVOID) {
 // and send places it in the legacy encrypted packet. Install all three only
 // after the CRT and Winsock imports exist, and use Detours trampolines instead
 // of the unsafe five-byte CreateHook32 implementation.
+struct ImportedFunction5065 {
+    PVOID address;
+    char module[64];
+    bool exactImport;
+    ImportedFunction5065():address(NULL),exactImport(false){module[0]=0;}
+};
+
+static bool ExecutableTarget(PVOID address) {
+    if(!address)return false;
+    MEMORY_BASIC_INFORMATION memory={};
+    if(!VirtualQuery(address,&memory,sizeof(memory)) || memory.State!=MEM_COMMIT ||
+       (memory.Protect&(PAGE_GUARD|PAGE_NOACCESS)))return false;
+    DWORD protection=memory.Protect&0xff;
+    return protection==PAGE_EXECUTE || protection==PAGE_EXECUTE_READ ||
+        protection==PAGE_EXECUTE_READWRITE || protection==PAGE_EXECUTE_WRITECOPY;
+}
+
+static bool MainImportDirectory(BYTE*& image,DWORD& imageSize,
+    PIMAGE_IMPORT_DESCRIPTOR& descriptors) {
+    image=reinterpret_cast<BYTE*>(GetModuleHandleA(NULL));
+    if(!image)return false;
+    PIMAGE_DOS_HEADER dos=reinterpret_cast<PIMAGE_DOS_HEADER>(image);
+    if(dos->e_magic!=IMAGE_DOS_SIGNATURE || dos->e_lfanew<=0 || dos->e_lfanew>4096)return false;
+    PIMAGE_NT_HEADERS32 nt=reinterpret_cast<PIMAGE_NT_HEADERS32>(image+dos->e_lfanew);
+    if(nt->Signature!=IMAGE_NT_SIGNATURE || nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_I386)return false;
+    imageSize=nt->OptionalHeader.SizeOfImage;
+    IMAGE_DATA_DIRECTORY imports=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if(!imports.VirtualAddress || imports.VirtualAddress>=imageSize)return false;
+    descriptors=reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(image+imports.VirtualAddress);
+    return true;
+}
+
+static void LogMainImportModules() {
+    BYTE* image=NULL; DWORD imageSize=0; PIMAGE_IMPORT_DESCRIPTOR imports=NULL;
+    if(!MainImportDirectory(image,imageSize,imports)) {
+        Flash5065Trace("ERROR: Conquer.exe PE import directory is unavailable."); return;
+    }
+    Flash5065Trace("Conquer.exe PE import inventory follows:");
+    for(unsigned i=0;i<256 && imports[i].Name;i++) {
+        if(imports[i].Name>=imageSize)break;
+        const char* name=reinterpret_cast<const char*>(image+imports[i].Name);
+        char line[160]={}; sprintf_s(line,"PE import module[%u]=%s.",i,name);
+        Flash5065Trace(line);
+    }
+}
+
+static ImportedFunction5065 ResolveMainImport(const char* functionName) {
+    ImportedFunction5065 result;
+    BYTE* image=NULL; DWORD imageSize=0; PIMAGE_IMPORT_DESCRIPTOR imports=NULL;
+    if(!MainImportDirectory(image,imageSize,imports))return result;
+    for(unsigned descriptorIndex=0;descriptorIndex<256 && imports[descriptorIndex].Name;descriptorIndex++) {
+        PIMAGE_IMPORT_DESCRIPTOR descriptor=&imports[descriptorIndex];
+        if(descriptor->Name>=imageSize || !descriptor->FirstThunk)continue;
+        const char* moduleName=reinterpret_cast<const char*>(image+descriptor->Name);
+        PIMAGE_THUNK_DATA32 iat=reinterpret_cast<PIMAGE_THUNK_DATA32>(image+descriptor->FirstThunk);
+        PIMAGE_THUNK_DATA32 names=descriptor->OriginalFirstThunk
+            ? reinterpret_cast<PIMAGE_THUNK_DATA32>(image+descriptor->OriginalFirstThunk) : NULL;
+        if(!names)continue;
+        for(unsigned index=0;index<4096 && names[index].u1.AddressOfData;index++) {
+            DWORD nameRva=names[index].u1.AddressOfData;
+            if(IMAGE_SNAP_BY_ORDINAL32(nameRva) || nameRva>=imageSize)continue;
+            PIMAGE_IMPORT_BY_NAME imported=reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(image+nameRva);
+            if(strcmp(reinterpret_cast<const char*>(imported->Name),functionName)!=0)continue;
+            strcpy_s(result.module,moduleName);
+            result.exactImport=true;
+            PVOID iatTarget=reinterpret_cast<PVOID>(iat[index].u1.Function);
+            if(ExecutableTarget(iatTarget))result.address=iatTarget;
+            if(!result.address) {
+                HMODULE module=GetModuleHandleA(moduleName);
+                if(module)result.address=GetProcAddress(module,functionName);
+            }
+            return result;
+        }
+    }
+    // Some clients resolve a CRT/Winsock export dynamically. Restrict the
+    // fallback to modules that Conquer.exe itself imports; never guess a CRT.
+    for(unsigned descriptorIndex=0;descriptorIndex<256 && imports[descriptorIndex].Name;descriptorIndex++) {
+        if(imports[descriptorIndex].Name>=imageSize)continue;
+        const char* moduleName=reinterpret_cast<const char*>(image+imports[descriptorIndex].Name);
+        HMODULE module=GetModuleHandleA(moduleName);
+        PVOID address=module?GetProcAddress(module,functionName):NULL;
+        if(address && ExecutableTarget(address)) {
+            strcpy_s(result.module,moduleName); result.address=address;
+            return result;
+        }
+    }
+    return result;
+}
+
+static void LogResolvedFunction(const char* functionName,const ImportedFunction5065& target) {
+    char line[240]={};
+    sprintf_s(line,"Protocol resolve function=%s module=%s address=0x%p exact-main-import=%s.",
+        functionName,target.module[0]?target.module:"not-found",target.address,
+        target.exactImport?"yes":"no");
+    Flash5065Trace(line);
+}
+
 static DWORD WINAPI Deferred5065ProtocolHooks(LPVOID)
 {
     Flash5065Trace("Redux 5065 protocol hook worker started.");
+    LogMainImportModules();
     for (int attempt = 0; attempt < 300; ++attempt) {
-        HMODULE winsock = GetModuleHandleA("ws2_32.dll");
-        HMODULE crt = GetModuleHandleA("msvcr90.dll");
-        PVOID connectAddress = winsock ? GetProcAddress(winsock, "connect") : NULL;
-        PVOID sendAddress = winsock ? GetProcAddress(winsock, "send") : NULL;
-        PVOID snprintfAddress = crt ? GetProcAddress(crt, "_snprintf") : NULL;
-        if (connectAddress && sendAddress && snprintfAddress) {
-            native5065_connect = reinterpret_cast<ConnectProc>(connectAddress);
-            native5065_send = reinterpret_cast<SendProc>(sendAddress);
-            PVOID originalSnprintf = snprintfAddress;
-            if (DetourTransactionBegin() != NO_ERROR) break;
-            DetourUpdateThread(GetCurrentThread());
-            LONG a = DetourAttach(reinterpret_cast<PVOID*>(&native5065_connect), csv3_connect);
-            LONG b = DetourAttach(reinterpret_cast<PVOID*>(&native5065_send), csv3_send);
-            LONG c = DetourAttach(&originalSnprintf, csv3_snprintf);
-            LONG committed = (a == NO_ERROR && b == NO_ERROR && c == NO_ERROR)
-                ? DetourTransactionCommit() : DetourTransactionAbort();
-            if (committed == NO_ERROR) {
-                Flash5065Trace("Redux connect/send/password hooks installed successfully.");
+        ImportedFunction5065 connectTarget=ResolveMainImport("connect");
+        ImportedFunction5065 sendTarget=ResolveMainImport("send");
+        ImportedFunction5065 snprintfTarget=ResolveMainImport("_snprintf");
+        if(!snprintfTarget.address)snprintfTarget=ResolveMainImport("snprintf");
+        if(attempt==0 || attempt%20==0) {
+            LogResolvedFunction("connect",connectTarget);
+            LogResolvedFunction("send",sendTarget);
+            LogResolvedFunction("_snprintf/snprintf",snprintfTarget);
+        }
+        if (connectTarget.address && sendTarget.address && snprintfTarget.address) {
+            native5065_connect = reinterpret_cast<ConnectProc>(connectTarget.address);
+            native5065_send = reinterpret_cast<SendProc>(sendTarget.address);
+            protocol5065_snprintf = snprintfTarget.address;
+            LONG transaction=DetourTransactionBegin();
+            LONG update=transaction==NO_ERROR?DetourUpdateThread(GetCurrentThread()):transaction;
+            LONG a=update==NO_ERROR?DetourAttach(reinterpret_cast<PVOID*>(&native5065_connect),csv3_connect):update;
+            LONG b=a==NO_ERROR?DetourAttach(reinterpret_cast<PVOID*>(&native5065_send),csv3_send):a;
+            LONG c=b==NO_ERROR?DetourAttach(&protocol5065_snprintf,csv3_snprintf):b;
+            char hookLog[256]={};
+            sprintf_s(hookLog,"Detour statuses transaction=%ld updateThread=%ld connect=%ld send=%ld snprintf=%ld.",
+                transaction,update,a,b,c);
+            Flash5065Trace(hookLog);
+            bool allAttached=transaction==NO_ERROR && update==NO_ERROR &&
+                a==NO_ERROR && b==NO_ERROR && c==NO_ERROR;
+            LONG committed = allAttached ? DetourTransactionCommit() : DetourTransactionAbort();
+            sprintf_s(hookLog,"Protocol DetourTransaction action=%s result=%ld.",
+                allAttached?"commit":"abort",committed);
+            Flash5065Trace(hookLog);
+            if (allAttached && committed == NO_ERROR) {
+                Flash5065Trace("Redux connect/send/CRT password hooks installed successfully; connection is not yet verified until connect/getpeername and authentication send logs succeed.");
+                PublishProtocolOutcome(true);
                 return 0;
             }
             native5065_connect = NULL;
             native5065_send = NULL;
+            protocol5065_snprintf = NULL;
             Flash5065Trace("ERROR: Detours rejected Redux protocol hooks.");
+            PublishProtocolOutcome(false);
             return 1;
         }
         Sleep(50);
     }
-    Flash5065Trace("ERROR: ws2_32/msvcr90 imports unavailable after 15 seconds.");
+    Flash5065Trace("ERROR: connect, send or the CRT snprintf import from Conquer.exe remained unresolved after 15 seconds.");
+    PublishProtocolOutcome(false);
     return 1;
 }
 
@@ -506,5 +710,7 @@ void csv3_shutdown()
         RemoveVectoredExceptionHandler(g_exceptionHandler);
         g_exceptionHandler=NULL;
     }
+    if(g_protocolReadyEvent){CloseHandle(g_protocolReadyEvent);g_protocolReadyEvent=NULL;}
+    if(g_protocolFailedEvent){CloseHandle(g_protocolFailedEvent);g_protocolFailedEvent=NULL;}
     SecureZeroMemory(szPassword,sizeof(szPassword));
 }

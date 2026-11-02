@@ -12,7 +12,9 @@ Assert ($launcher.Contains('Skipping late duplicate CLHook injection.')) 'Second
 $hook=Get-Content -LiteralPath (Join-Path $root 'ConquerHook/CLHook.cpp') -Raw
 Assert ($launcher.Contains('EARLY_FLASH5065=')) 'Early startup flag missing'
 Assert ($hook.Contains('Deferred5065ProtocolHooks') -and $hook.Contains('EARLY_FLASH5065')) 'Pre-entry networking must be deferred'
-Assert ($hook.Contains('connectAddress && sendAddress && snprintfAddress')) 'All Redux protocol imports must be validated'
+Assert ($hook.Contains('ResolveMainImport("connect")') -and
+        $hook.Contains('ResolveMainImport("send")') -and
+        $hook.Contains('ResolveMainImport("_snprintf")')) 'All Redux protocol imports must be resolved from Conquer.exe'
 Assert ($launcher.Contains('Conquer.exe finalizo. PID=')) 'Client exit code must be logged'
 Assert ($launcher.Contains('FLASH5065_DIAGNOSTIC_MODE=')) 'Diagnostic mode flag missing from CLHook.ini'
 Assert ($hook.Contains('Flash detour installation returned HRESULT=')) 'Flash hook HRESULT stage not logged'

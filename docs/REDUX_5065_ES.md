@@ -341,6 +341,17 @@ redirige `LoadRegTypeLib` y `QueryPathOfRegTypeLib` para el LIBID
 `{D27CDB6B-AE6D-11CF-96B8-444553540000}` y usa `LoadTypeLibEx` con
 `REGKIND_NONE`; no escribe esa typelib en el registro global.
 
+## Resolución de CRT y red del cliente 5065
+
+El protocolo ya no supone que el cliente use `msvcr90.dll`. En ejecución,
+CLHook recorre el directorio de imports PE de `Conquer.exe`, identifica la DLL
+real que exporta `_snprintf`/`snprintf` y resuelve también `connect` y `send`.
+El log muestra módulo, función, dirección y resultado individual de cada
+detour. Una instalación correcta todavía no significa conexión correcta:
+`connect` registra origen, destino Redux configurado y el peer obtenido con
+`getpeername`; el primer `send` de autenticación registra, sin contraseña, si
+se completaron descifrado, inserción y cifrado legacy.
+
 
 ## Crash aislado por etapas — ExitCode 0xC0000005
 

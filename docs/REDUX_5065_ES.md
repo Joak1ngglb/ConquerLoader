@@ -304,3 +304,26 @@ El inicio completo del cliente sigue sin estar verificado: el build solo
 confirma compilación y lógica de infraestructura de arranque.
 
 Referencia: https://gitlab.com/spirited/dragon/
+
+
+## Crash al llegar a 100% (inicio temprano)
+
+Se descubrió un fallo de secuencia: al inyectar `CLHook.dll` desde
+`QueueUserAPC` antes del entry point, el antiguo `csv3_init` llamaba
+`CreateHook32(GetProcAddress(ws2_32.dll, connect), ...)` aunque la DLL
+Winsock todavía podía no estar lista. El viejo `CreateHook32` no valida
+`NULL` y ejecuta `memcmp` sobre esa dirección, con riesgo de cierre
+inmediato del cliente. La nueva versión solo instala el hook local Flash
+al inicio, difiere el hook de red hasta que `ws2_32.dll` esté cargada y
+comprueba que `connect` sea no nulo.
+
+El progreso **100% pertenece al launcher**, no confirma que el juego esté
+visible. Para investigar, el log `CLHook-5065.log` muestra si la DLL se
+cargó y si el hook de red se instaló. `conquerloader.log` registra el código
+de salida de Conquer.exe; el launcher permanece abierto si falla la versión
+5065, para que pueda verse el error. No introducir contraseñas reales hasta
+confirmar la pantalla original.
+
+La advertencia de Flash 7.0.14.0 que muestra ConquerLoader es una advertencia
+de seguridad **del launcher**, distinta de «Please install Flash 6.0 or above»
+del ejecutable. El OCX 7 antiguo no se vuelve seguro porque cargue.

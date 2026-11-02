@@ -9,5 +9,10 @@ Assert ($early.Contains('CreateSuspended') -and $early.Contains('QueueUserAPC(')
 Assert ($early.IndexOf('QueueUserAPC(loadLibrary') -lt $early.IndexOf('ResumeThread(info.hThread)')) 'DLL must be queued BEFORE resuming the game'
 Assert ($launcher.Contains('LoaderConfig.UseOriginalFlashLogin && !CustomDLLs')) 'Only original Flash 5065 uses early hook'
 Assert ($launcher.Contains('Skipping late duplicate CLHook injection.')) 'Second DLL injection not disabled'
+$hook=Get-Content -LiteralPath (Join-Path $root 'ConquerHook/CLHook.cpp') -Raw
+Assert ($launcher.Contains('EARLY_FLASH5065=')) 'Early startup flag missing'
+Assert ($hook.Contains('Deferred5065ConnectHook') -and $hook.Contains('EARLY_FLASH5065')) 'Pre-entry networking must be deferred'
+Assert ($hook.Contains('if (connectAddress)')) 'Do not hook a NULL winsock function'
+Assert ($launcher.Contains('Conquer.exe finalizo. PID=')) 'Client exit code must be logged'
 Assert ($proj.Contains('Models\EarlyInjectedClient.cs')) 'Early injector missing from C# compilation'
 Write-Host 'OK: Dragon-style pre-entry Flash hook wired and scoped to 5065.'

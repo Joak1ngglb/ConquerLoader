@@ -208,6 +208,43 @@ __declspec(naked) DWORD __stdcall csv3_tqsend(PBYTE msg, DWORD len)
 	}
 }
 
+// The pre-entry Flash hook is loaded by an APC before Conquer initializes
+// its imports. WS2_32.dll is a static import of the game, but the module may
+// not be usable yet when the APC runs. Do NOT dereference a NULL connect
+// address: the old CreateHook32 would crash inside memcmp(NULL,...).
+static void Flash5065Trace(const char* message)
+{
+    char filename[MAX_PATH] = {};
+    DWORD n = GetModuleFileNameA(NULL, filename, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return;
+    char* slash = strrchr(filename, '\\');
+    if (!slash) return;
+    strcpy_s(slash + 1, MAX_PATH - (slash + 1 - filename), "CLHook-5065.log");
+    FILE* file = NULL;
+    if (fopen_s(&file, filename, "a") == 0 && file) {
+        fprintf(file, "%lu %s\n", GetTickCount(), message);
+        fclose(file);
+    }
+}
+static DWORD WINAPI Deferred5065ConnectHook(LPVOID)
+{
+    Flash5065Trace("Deferred network hook started; waiting for ws2_32.dll.");
+    for (int attempt = 0; attempt < 300; ++attempt) {
+        HMODULE winsock = GetModuleHandleA("ws2_32.dll");
+        LPVOID connectAddress = winsock ? GetProcAddress(winsock, "connect") : NULL;
+        if (connectAddress) {
+            // No other network hooks are installed in 5065 mode.
+            // The game starts disconnected, so it is safe to wait for imports.
+            CreateHook32(connectAddress, csv3_connect, &connect_stub);
+            Flash5065Trace("Deferred connect hook installed successfully.");
+            return 0;
+        }
+        Sleep(50);
+    }
+    Flash5065Trace("ERROR: ws2_32/connect was not available within 15 seconds.");
+    return 1;
+}
+
 void csv3_init(HMODULE hModule)
 {
 	float f = 0; // load support for floating operations -- thx ntl3fty!
@@ -250,11 +287,24 @@ void csv3_init(HMODULE hModule)
 
     // Keep legacy hook for other versions; do not load Flash for native 5065.
     if (!flashless && ClientVersion <= 6186) {
-		if (!DisableAutoFixFlash) {
-			CFlashFix flash;
-			flash.Hook();
-		}
-	}
+        if (!DisableAutoFixFlash) {
+            CFlashFix flash;
+            flash.Hook();
+        }
+    }
+
+    // Dragon-style pre-entry injection requires deferring the connect hook
+    // until WS2_32 has been initialized by the OS loader. It is not safe
+    // to call CreateHook32(NULL, ...), as the legacy routine does.
+    bool earlyFlash5065 = ClientVersion == 5065 && !flashless &&
+        GetPrivateProfileIntA(HeaderConfig, "EARLY_FLASH5065", 0, szConfig) == 1;
+    if (earlyFlash5065) {
+        Flash5065Trace("CLHook.dll loaded pre-entry; Flash redirect requested.");
+        HANDLE worker = CreateThread(NULL, 0, Deferred5065ConnectHook, NULL, 0, NULL);
+        if (worker) CloseHandle(worker);
+        else Flash5065Trace("ERROR: failed to start deferred network hook thread.");
+        return;
+    }
 
 	if (ClientVersion >= 5600) {
 		//

@@ -169,6 +169,18 @@ namespace ConquerLoader.Models
                         "La inyeccion APC no cargo CLHook.dll antes de iniciar el juego; se cancelo la prueba.");
 
                 log("CLHook.dll confirmado dentro de Conquer.exe; inicio temprano completado.");
+                // A loaded DLL does not mean Conquer.exe reached its main window.
+                // Detect immediate fatal exits instead of showing 100% as success.
+                for (int i = 0; i < 12; ++i)
+                {
+                    process.Refresh();
+                    if (process.HasExited)
+                        throw new InvalidOperationException(
+                            "Conquer.exe se cerro tras la carga temprana del hook. ExitCode=0x" +
+                            process.ExitCode.ToString("X8") +
+                            ". Revisar CLHook-5065.log.");
+                    Thread.Sleep(100);
+                }
                 started = true;
                 return process;
             }

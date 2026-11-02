@@ -478,7 +478,9 @@ namespace ConquerLoader.Forms.WPF
                         + Environment.NewLine + "DISABLE_AUTOFIX_FLASH=" +
                             ((LoaderConfig.DisableAutoFixFlash && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
                         + Environment.NewLine + "FLASHLESS_NATIVE_LOGIN=" +
-                            ((SelectedServer.ServerVersion == 5065 && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0"));
+                            ((SelectedServer.ServerVersion == 5065 && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
+                        + Environment.NewLine + "EARLY_FLASH5065=" +
+                            ((SelectedServer.ServerVersion == 5065 && LoaderConfig.UseOriginalFlashLogin) ? "1" : "0"));
                     Core.LogWritter.Write("5065 login mode: " +
                         (LoaderConfig.UseOriginalFlashLogin ? "original local Flash ActiveX (no global COM registration)" : "experimental native"));
 
@@ -666,7 +668,14 @@ namespace ConquerLoader.Forms.WPF
                 return;
             }
 
-            Core.LogWritter.Write("Process launched!");
+            Core.LogWritter.Write("Process launched! PID=" + conquerProc.Id);
+            if (conquerProc.HasExited)
+            {
+                Core.LogWritter.Write("[EarlyFlash5065] Conquer.exe already exited. ExitCode=0x" +
+                    conquerProc.ExitCode.ToString("X8"));
+                ShowWarning("Conquer.exe se cerro al iniciar. Revisa conquerloader.log y CLHook-5065.log.");
+                return;
+            }
 
             if (CustomDLLs)
             {
@@ -801,10 +810,30 @@ namespace ConquerLoader.Forms.WPF
 
         private void ConquerProc_Exited(object sender, EventArgs e)
         {
-            if (Process.GetProcessesByName(SelectedServer.ExecutableName.Replace(".exe", "")).Count() <= 0)
+            Process exited = sender as Process;
+            int? exitCode = null;
+            try { if (exited != null) exitCode = exited.ExitCode; }
+            catch (InvalidOperationException) { }
+            Core.LogWritter.Write("[Conquer5065] Conquer.exe finalizo. PID=" +
+                (exited != null ? exited.Id.ToString() : "?") +
+                ", ExitCode=" + (exitCode.HasValue ? "0x" + exitCode.Value.ToString("X8") : "desconocido"));
+
+            if (SelectedServer != null && SelectedServer.ServerVersion == 5065)
             {
-                Environment.Exit(0);
+                // Keep the launcher open, retaining its log, instead of silently
+                // closing the app and hiding the cause of the client crash.
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    ShowWarning("Conquer.exe se cerro. Codigo: " +
+                        (exitCode.HasValue ? "0x" + exitCode.Value.ToString("X8") : "desconocido") +
+                        ". En la carpeta del cliente revisa conquerloader.log y CLHook-5065.log.");
+                }));
+                return;
             }
+
+            if (SelectedServer != null &&
+                Process.GetProcessesByName(SelectedServer.ExecutableName.Replace(".exe", "")).Length <= 0)
+                Environment.Exit(0);
         }
 
         private void Worker_ProgressChanged(object sender, ProgressChangedEventArgs e)

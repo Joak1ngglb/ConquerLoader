@@ -480,9 +480,15 @@ namespace ConquerLoader.Forms.WPF
                         + Environment.NewLine + "FLASHLESS_NATIVE_LOGIN=" +
                             ((SelectedServer.ServerVersion == 5065 && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
                         + Environment.NewLine + "EARLY_FLASH5065=" +
-                            ((SelectedServer.ServerVersion == 5065 && LoaderConfig.UseOriginalFlashLogin) ? "1" : "0"));
+                            ((SelectedServer.ServerVersion == 5065 && LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
+                        + Environment.NewLine + "FLASH5065_DIAGNOSTIC_MODE=" +
+                            Math.Max(0, Math.Min(3, LoaderConfig.Flash5065DiagnosticMode)));
                     Core.LogWritter.Write("5065 login mode: " +
                         (LoaderConfig.UseOriginalFlashLogin ? "original local Flash ActiveX (no global COM registration)" : "experimental native"));
+
+                    if (SelectedServer.ServerVersion == 5065 && LoaderConfig.UseOriginalFlashLogin)
+                        Core.LogWritter.Write("[EarlyFlash5065] Diagnostic mode=" +
+                            LoaderConfig.Flash5065DiagnosticMode + " (0=full,1=Flash+COM,2=LoadLibrary only,3=no Flash hook)");
 
                     Core.LogWritter.Write("Created the Hook Configuration");
 

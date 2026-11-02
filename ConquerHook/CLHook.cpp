@@ -285,24 +285,41 @@ void csv3_init(HMODULE hModule)
         }
     }
 
-    // Keep legacy hook for other versions; do not load Flash for native 5065.
-    if (!flashless && ClientVersion <= 6186) {
-        if (!DisableAutoFixFlash) {
-            CFlashFix flash;
-            flash.Hook();
-        }
-    }
-
-    // Dragon-style pre-entry injection requires deferring the connect hook
-    // until WS2_32 has been initialized by the OS loader. It is not safe
-    // to call CreateHook32(NULL, ...), as the legacy routine does.
+    // Stage isolation: distinguish failures originating in Flash/COM detours
+    // from the unsafe legacy Winsock patching path. The 5065 diagnostic profile
+    // defaults to mode 1; no network hook is installed in diagnostic mode.
     bool earlyFlash5065 = ClientVersion == 5065 && !flashless &&
         GetPrivateProfileIntA(HeaderConfig, "EARLY_FLASH5065", 0, szConfig) == 1;
+    int diagnosticMode = earlyFlash5065
+        ? GetPrivateProfileIntA(HeaderConfig, "FLASH5065_DIAGNOSTIC_MODE", 1, szConfig)
+        : 0;
+    if (diagnosticMode < 0 || diagnosticMode > 3) diagnosticMode = 1;
     if (earlyFlash5065) {
-        Flash5065Trace("CLHook.dll loaded pre-entry; Flash redirect requested.");
-        HANDLE worker = CreateThread(NULL, 0, Deferred5065ConnectHook, NULL, 0, NULL);
-        if (worker) CloseHandle(worker);
-        else Flash5065Trace("ERROR: failed to start deferred network hook thread.");
+        char state[96] = {};
+        sprintf_s(state, "Early 5065 hook entry. Diagnostic mode=%d.", diagnosticMode);
+        Flash5065Trace(state);
+    }
+
+    if (!flashless && ClientVersion <= 6186 && !DisableAutoFixFlash) {
+        if (!earlyFlash5065 || diagnosticMode < 3) {
+            if (earlyFlash5065) Flash5065Trace("Installing Flash detour...");
+            CFlashFix flash;
+            flash.Hook(!earlyFlash5065 || diagnosticMode < 2);
+            if (earlyFlash5065) Flash5065Trace("Flash detour installation returned.");
+        } else Flash5065Trace("All Flash hooks disabled for isolation.");
+    }
+
+    // Dragon-style pre-entry injection: do not install 5065 network hooks
+    // unless mode 0 was explicitly selected after the Flash-only test.
+    if (earlyFlash5065) {
+        if (diagnosticMode == 0) {
+            Flash5065Trace("Installing network hook on deferred thread.");
+            HANDLE worker = CreateThread(NULL, 0, Deferred5065ConnectHook, NULL, 0, NULL);
+            if (worker) CloseHandle(worker);
+            else Flash5065Trace("ERROR: failed to start deferred network hook thread.");
+        } else {
+            Flash5065Trace("Network hook skipped in diagnostic mode.");
+        }
         return;
     }
 

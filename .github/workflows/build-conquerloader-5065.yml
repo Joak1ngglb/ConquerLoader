@@ -47,6 +47,12 @@ jobs:
         shell: pwsh
         run: |
           ./tests/Test-EarlyFlash5065.ps1
+      - name: Verify staged Flash diagnostic behavior
+        shell: pwsh
+        run: |
+          $profile = Get-Content 'profiles/redux-5065.local.json' -Raw | ConvertFrom-Json
+          if ($profile.Flash5065DiagnosticMode -ne 1) { throw 'Flash-only stage should be default' }
+          if (-not (Test-Path tools/Diagnose-Crash5065.ps1)) { throw 'Crash reporter missing' }
       - name: Compile launcher (Release x86, .NET Framework 4.6.2)
         shell: pwsh
         run: |
@@ -86,6 +92,7 @@ jobs:
           Copy-Item "$source/*" $dist -Recurse -Force
           Copy-Item 'profiles/redux-5065.local.json' "$dist/config.json" -Force
           Copy-Item 'tools/Diagnose-Flash5065.ps1' "$dist/Diagnose-Flash5065.ps1" -Force
+          Copy-Item 'tools/Diagnose-Crash5065.ps1' "$dist/Diagnose-Crash5065.ps1" -Force
           Copy-Item 'FlashFix-CLHook.dll' "$dist/CLHook.dll" -Force
           if (-not (Test-Path "$dist/CLHook.dll")) { throw 'Missing native Flash-enabled legacy hook' }
           Write-Host "Distributed CLHook from native source: $((Get-Item "$dist/CLHook.dll").Length) bytes"

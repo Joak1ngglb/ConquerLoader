@@ -327,3 +327,41 @@ confirmar la pantalla original.
 La advertencia de Flash 7.0.14.0 que muestra ConquerLoader es una advertencia
 de seguridad **del launcher**, distinta de «Please install Flash 6.0 or above»
 del ejecutable. El OCX 7 antiguo no se vuelve seguro porque cargue.
+
+
+## Crash aislado por etapas — ExitCode 0xC0000005
+
+El error `0xC0000005` es una infracción de acceso a memoria. El hecho de
+que `CLHook.dll` haya aparecido en los módulos de Conquer.exe no significa
+que el juego ni el OCX estén inicializados. Las pruebas de compilación **no**
+son pruebas de ejecución real en Windows con el cliente 5065.
+
+Se añadió `Flash5065DiagnosticMode` a `config.json`, aplicable únicamente
+al inicio temprano del cliente 5065 con `UseOriginalFlashLogin=true`.
+
+| Valor | Hook Flash LoadLibrary | Fallback COM | Hook Winsock |
+|---|---|---|---|
+| 0 | Sí | Sí | Sí (normal, experimental) |
+| 1 (predeterminado) | Sí | Sí | No, aislado |
+| 2 | Sí | No | No |
+| 3 | No | No | No; solo carga CLHook |
+
+Con el juego cerrado y copia de seguridad, el orden de prueba es 1, 2, 3.
+Usar únicamente una VM aislada para ejecutar Flash 7 sin firma. En 1/2/3
+no esperes poder conectar al servidor: se está diagnosticando la pantalla
+Flash, no el networking. No ingreses contraseñas reales.
+
+El archivo `CLHook-5065.log` distingue etapas. El script
+`Diagnose-Crash5065.ps1` consulta ese log, `conquerloader.log` y los
+eventos Application Error ID 1000 de Windows para registrar el módulo
+que falla, sin alterar el registro ni subir datos automáticamente.
+
+En PowerShell dentro de la carpeta del cliente:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\\Diagnose-Crash5065.ps1
+```
+
+**Importante:** evitar varias instancias de Conquer.exe; el registro del
+usuario mostraba dos. Ejecutar con una copia del cliente y su Flash.ocx
+solo dentro de una VM o entorno de prueba aislado.

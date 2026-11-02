@@ -91,6 +91,7 @@ $config = [ordered]@{
     ServernameChange = $false
     DisableAutoFixFlash = $false
     UseOriginalFlashLogin = ($LoginMode -eq 'Flash')
+    Flash5065DiagnosticMode = 1
     Title = 'Redux 5065 local'
     Description = 'Conquer Online 5065 - Redux'
     Lang = 'es'

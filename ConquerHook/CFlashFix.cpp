@@ -85,7 +85,7 @@ namespace {
     }
 }
 
-void CFlashFix::Hook() {
+void CFlashFix::Hook(bool enableComFallback) {
     HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
     HMODULE ole = GetModuleHandleW(L"ole32.dll");
     if (!kernel) return;
@@ -93,7 +93,7 @@ void CFlashFix::Hook() {
         GetProcAddress(kernel, "LoadLibraryExW"));
     if (!pLoadLibrary) return;
 
-    if (ole) {
+    if (ole && enableComFallback) {
         pCoCreateInstance = reinterpret_cast<HookCoCreateInstance>(
             GetProcAddress(ole, "CoCreateInstance"));
         pCoGetClassObject = reinterpret_cast<HookCoGetClassObject>(

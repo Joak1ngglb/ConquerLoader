@@ -18,7 +18,7 @@ public:
     static HookCoGetClassObject pCoGetClassObject;
     static HookCLSIDFromProgID pCLSIDFromProgID;
 
-    static void Hook();
+    static void Hook(bool enableComFallback = true);
     static HMODULE WINAPI LoadLibraryDetour(LPCWSTR filename, HANDLE file, DWORD flags);
     static HRESULT WINAPI CoCreateInstanceDetour(REFCLSID clsid, LPUNKNOWN outer,
         DWORD context, REFIID iid, LPVOID* result);

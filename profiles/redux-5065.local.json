@@ -47,6 +47,7 @@
   "ServernameChange": false,
   "DisableAutoFixFlash": false,
   "UseOriginalFlashLogin": true,
+  "Flash5065DiagnosticMode": 1,
   "Title": "Redux 5065 local",
   "Description": "Conquer Online 5065 - Redux local",
   "Lang": "es",

@@ -5,17 +5,22 @@
 
 // Reverse-engineered for the supplied PE32 dated 2008-08-24 ONLY.
 // A mismatch fails closed, without patching arbitrary client versions.
-extern "C" volatile PVOID g_nativeLoginObject = NULL;
-extern "C" DWORD g_nativeGameThread = 0;
-extern "C" void* g_ctorTrampoline = NULL;
 namespace {
 const DWORD kBase=0x00400000, kTimestamp=0x48b121fe, kSize=0x18f000;
 const DWORD kConstructor=0x43121e, kFlashCheck=0x47a0b1, kNativeLogin=0x431e38;
+// Reverse-engineered from Conquer.exe 5065:
+// 0x468A89 stores the main game object's pointer at 0x56BF4C.
+// Its nested DlgLoginFlash object starts at game object + 0xA0.
+// The original constructor runs BEFORE the launcher injects CLHook.dll,
+// so hooking that constructor later cannot capture the login object.
+const DWORD kGameObjectGlobal=0x56bf4c, kLoginOffset=0xa0;
 const DWORD kLoginVtable=0x52d940;
 const UINT kSubmit=WM_APP+5065;
 HMODULE g_module=NULL;
 HHOOK g_hook=NULL;
-HWND g_user=NULL, g_pass=NULL, g_status=NULL;
+HWND g_user=NULL, g_pass=NULL, g_status=NULL, g_loginWindow=NULL;
+DWORD g_nativeGameThread=0;
+BYTE* g_nativeLoginObject=NULL;
 char g_account[16]={0}, g_password[16]={0};
 volatile LONG g_pending=0;
 
@@ -40,43 +45,34 @@ bool ExactBuild() {
     return memcmp(reinterpret_cast<void*>(kConstructor),ctor,sizeof(ctor))==0 &&
            memcmp(reinterpret_cast<void*>(kFlashCheck),check,sizeof(check))==0;
 }
-void __stdcall Capture(void* object) {
-    g_nativeLoginObject=object;
-    g_nativeGameThread=GetCurrentThreadId();
-}
-__declspec(naked) void CaptureCtor() {
-    __asm {
-        pushfd
-        pushad
-        push ecx
-        call Capture
-        popad
-        popfd
-        jmp dword ptr [g_ctorTrampoline]
-    }
-}
-bool HookCtor() {
-    BYTE* t=static_cast<BYTE*>(VirtualAlloc(NULL,16,MEM_COMMIT|MEM_RESERVE,PAGE_EXECUTE_READWRITE));
-    if(!t)return false;
-    memcpy(t,reinterpret_cast<void*>(kConstructor),5);
-    t[5]=0xe9;
-    *reinterpret_cast<DWORD*>(t+6)=kConstructor+5-reinterpret_cast<DWORD>(t+10);
-    g_ctorTrampoline=t;
-    BYTE jump[5]={0xe9};
-    *reinterpret_cast<DWORD*>(jump+1)=reinterpret_cast<DWORD>(&CaptureCtor)-(kConstructor+5);
-    if(!WriteCode(kConstructor,jump,sizeof(jump))) {
-        g_ctorTrampoline=NULL;
-        VirtualFree(t,0,MEM_RELEASE);return false;
-    }
-    return true;
-}
+// Obtain the object that already exists; the constructor was called before DLL injection.
 bool Ready() {
-    BYTE* object=reinterpret_cast<BYTE*>(g_nativeLoginObject);
-    if(!object)return false;
+    DWORD base=*reinterpret_cast<volatile DWORD*>(kGameObjectGlobal);
+    if(base<0x10000 || base>0x7ff00000)return false;
+    BYTE* object=reinterpret_cast<BYTE*>(base+kLoginOffset);
     MEMORY_BASIC_INFORMATION region={};
     if(!VirtualQuery(object,&region,sizeof(region)) || region.State!=MEM_COMMIT ||
        (region.Protect&(PAGE_NOACCESS|PAGE_GUARD)))return false;
-    return *reinterpret_cast<DWORD*>(object)==kLoginVtable;
+    BYTE* regionEnd=reinterpret_cast<BYTE*>(region.BaseAddress)+region.RegionSize;
+    if(regionEnd<object || static_cast<size_t>(regionEnd-object)<0x3e0)return false;
+    if(*reinterpret_cast<volatile DWORD*>(object)!=kLoginVtable)return false;
+    g_nativeLoginObject=object;
+    return true;
+}
+// Find the Conquer game window's own UI thread (not the native login popup).
+BOOL CALLBACK FindGameWindow(HWND hwnd,LPARAM context) {
+    DWORD processId=0;
+    DWORD threadId=GetWindowThreadProcessId(hwnd,&processId);
+    if(processId!=GetCurrentProcessId() || hwnd==g_loginWindow || !IsWindowVisible(hwnd))
+        return TRUE;
+    if(threadId==GetCurrentThreadId())return TRUE;
+    *reinterpret_cast<DWORD*>(context)=threadId;
+    return FALSE;
+}
+DWORD ResolveGameThread() {
+    DWORD threadId=0;
+    EnumWindows(FindGameWindow,reinterpret_cast<LPARAM>(&threadId));
+    return threadId;
 }
 LRESULT CALLBACK OnGameMessage(int code,WPARAM w,LPARAM l) {
     if(code>=0 && l) {
@@ -130,10 +126,13 @@ LRESULT CALLBACK UiProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
         }
         case WM_TIMER:
             if(Ready()) {
-                if(!g_hook && g_nativeGameThread)
-                    g_hook=SetWindowsHookExA(WH_GETMESSAGE,OnGameMessage,g_module,g_nativeGameThread);
-                Status(g_hook ? "Listo para autenticar con Redux." : "No se pudo enlazar al hilo del cliente.");
-            } else Status("Esperando el login interno del cliente...");
+                if(!g_hook) {
+                    g_nativeGameThread=ResolveGameThread();
+                    if(g_nativeGameThread)
+                        g_hook=SetWindowsHookExA(WH_GETMESSAGE,OnGameMessage,g_module,g_nativeGameThread);
+                }
+                Status(g_hook ? "Listo para autenticar con Redux." : "Login localizado; esperando el hilo grafico...");
+            } else Status("Buscando el objeto del login en el cliente...");
             return 0;
         case WM_COMMAND:
             if(LOWORD(w)==103 && HIWORD(w)==BN_CLICKED) {
@@ -169,6 +168,7 @@ DWORD WINAPI NativeUI(LPVOID) {
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_VISIBLE,
         CW_USEDEFAULT,CW_USEDEFAULT,385,265,NULL,NULL,g_module,NULL);
     if(!window)return 2;
+    g_loginWindow=window;
     MSG msg={};
     while(GetMessageA(&msg,NULL,0,0)>0) {
         if(!IsDialogMessageA(window,&msg)){TranslateMessage(&msg);DispatchMessageA(&msg);}
@@ -179,7 +179,6 @@ DWORD WINAPI NativeUI(LPVOID) {
 bool EnableFlashless5065(HMODULE module) {
     if(!ExactBuild())return false;
     g_module=module;
-    if(!HookCtor())return false;
     // The version test belongs to the Flash ActiveX path, not network auth.
     const BYTE success[]={0xb0,0x01,0xc3}; // mov al,1; ret
     if(!WriteCode(kFlashCheck,success,sizeof(success)))return false;

@@ -248,15 +248,31 @@ HRESULT CFlashFix::Hook(bool enableComFallback) {
 
 HRESULT CFlashFix::PreflightLocalControl() {
     SetStage(StagePreflight);
-    Trace("Starting local OCX preflight outside loader lock.");
+    Trace("Starting local OCX factory and instance preflight outside loader lock.");
+    HRESULT com=CoInitializeEx(NULL,COINIT_APARTMENTTHREADED);
+    TraceHr("CoInitializeEx(COINIT_APARTMENTTHREADED)",com);
+    bool uninitialize=SUCCEEDED(com);
     IClassFactory* factory=NULL;
     HRESULT hr=LocalFlashClassFactory(kShockwaveFlash,IID_IClassFactory,
         reinterpret_cast<void**>(&factory));
     if(SUCCEEDED(hr) && !factory)hr=E_UNEXPECTED;
+    IUnknown* instance=NULL;
+    if(SUCCEEDED(hr) && factory) {
+        SetStage(StageCreateInstance);
+        hr=factory->CreateInstance(NULL,IID_IUnknown,reinterpret_cast<void**>(&instance));
+        TraceHr("Preflight IClassFactory::CreateInstance(IID_IUnknown)",hr);
+    }
+    if(instance)instance->Release();
     if(factory)factory->Release();
-    if(SUCCEEDED(hr)){SetStage(StageReady);Trace("Preflight complete: local ShockwaveFlash class factory ready.");PublishOutcome(true);}
+    if(uninitialize)CoUninitialize();
+    if(SUCCEEDED(hr)){SetStage(StageReady);Trace("Preflight complete: local ShockwaveFlash ActiveX instance created.");PublishOutcome(true);}
     else {SetStage(StageFailed);TraceHr("Preflight local class factory",hr);PublishOutcome(false);}
     return hr;
+}
+
+void CFlashFix::PublishStartupFailure() {
+    SetStage(StageFailed);
+    PublishOutcome(false);
 }
 
 HMODULE WINAPI CFlashFix::LoadLibraryDetour(LPCWSTR filename,HANDLE file,DWORD flags) {

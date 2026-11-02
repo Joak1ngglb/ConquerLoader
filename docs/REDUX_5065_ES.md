@@ -328,6 +328,13 @@ La advertencia de Flash 7.0.14.0 que muestra ConquerLoader es una advertencia
 de seguridad **del launcher**, distinta de «Please install Flash 6.0 or above»
 del ejecutable. El OCX 7 antiguo no se vuelve seguro porque cargue.
 
+El aviso interno «Please install Flash 6.0 or above» corresponde al gate de
+versión obsoleto del cliente, que todavía puede fallar aunque el OCX local y
+su class factory sean válidos. Para el SHA-256 5065 soportado, CLHook valida
+hash, PE y bytes originales y cambia únicamente ese retorno **en memoria**.
+No altera `Conquer.exe` en disco ni reemplaza la interfaz SWF. El handshake
+solo publica `Ready` después de crear y liberar una instancia ActiveX real.
+
 
 ## Crash aislado por etapas — ExitCode 0xC0000005
 

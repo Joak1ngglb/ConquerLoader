@@ -34,7 +34,7 @@ if($hookLines.Count -eq 0){
     foreach($required in @(
         'LoadLibraryExW and COM activation hooks committed atomically.',
         'Flash.ocx loaded at',
-        'Preflight complete: local ShockwaveFlash class factory ready.'
+        'Preflight complete: local ShockwaveFlash ActiveX instance created.'
     )){
         Write-Host ("Checkpoint '$required': " + [bool]($hookLines -match [regex]::Escape($required)))
     }

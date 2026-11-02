@@ -22,6 +22,7 @@ public:
 
     static HRESULT Hook(bool enableComFallback=true);
     static HRESULT PreflightLocalControl();
+    static void PublishStartupFailure();
     static const char* StageName();
     static HMODULE WINAPI LoadLibraryDetour(LPCWSTR,HANDLE,DWORD);
     static HRESULT WINAPI CoCreateInstanceDetour(REFCLSID,LPUNKNOWN,DWORD,REFIID,LPVOID*);

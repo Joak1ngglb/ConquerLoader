@@ -328,3 +328,18 @@ bool EnableFlashless5065(HMODULE module) {
     Trace("Native Win32 login thread created.");
     return true;
 }
+
+bool EnableLocalFlashCompatibility5065() {
+    Trace("Validating exact 5065 build for original Flash version compatibility.");
+    if(!ExactBuild()) {
+        Trace("ERROR: Flash version gate not changed: executable hash/PE/bytes differ.");
+        return false;
+    }
+    const BYTE success[]={0xb0,0x01,0xc3};
+    if(!WriteCode(g_image+kFlashCheckRva,success,sizeof(success))) {
+        Trace("ERROR: verified Flash version gate could not be changed in memory.");
+        return false;
+    }
+    Trace("Original SWF preserved; obsolete Flash 6+ version gate bypassed in memory.");
+    return true;
+}

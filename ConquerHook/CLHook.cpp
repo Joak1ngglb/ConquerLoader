@@ -400,14 +400,18 @@ void csv3_init(HMODULE hModule)
         if (!earlyFlash5065 || diagnosticMode < 3) {
             if (earlyFlash5065) Flash5065Trace("Installing Flash detour...");
             HRESULT flashHook=CFlashFix::Hook(!earlyFlash5065 || diagnosticMode < 2);
+            bool versionGateReady=!earlyFlash5065 || EnableLocalFlashCompatibility5065();
             char flashState[128]={};
             sprintf_s(flashState,"Flash detour installation returned HRESULT=0x%08lX.",
                 static_cast<unsigned long>(flashHook));
             if (earlyFlash5065) Flash5065Trace(flashState);
-            if(SUCCEEDED(flashHook)) {
+            if(SUCCEEDED(flashHook) && versionGateReady) {
                 HANDLE preflight=CreateThread(NULL,0,Flash5065Preflight,NULL,0,NULL);
                 if(preflight)CloseHandle(preflight);
                 else Flash5065Trace("ERROR: failed to start Flash preflight thread.");
+            } else if(earlyFlash5065) {
+                Flash5065Trace("ERROR: Flash hook or exact-build version compatibility failed.");
+                CFlashFix::PublishStartupFailure();
             }
         } else Flash5065Trace("All Flash hooks disabled for isolation.");
     }

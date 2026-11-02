@@ -160,3 +160,23 @@ Si se deshabilita `FLASHLESS_NATIVE_LOGIN`, vuelve el comportamiento anterior.
 
 **Limitación de versión:** nunca aplicar a un Conquer.exe diferente.
 No modificar `Conquer.exe` en disco ni publicar sus archivos en Git.
+
+
+## Estado OFFLINE en el launcher
+
+La pantalla de inicio de sesión Win32 `Listo para autenticar con Redux`
+solo confirma que está enlazado el objeto del cliente con el hook. **NO**
+confirma que Redux esté escuchando en los puertos, ni que el login funcione.
+El status del launcher muestra por separado los probes TCP de
+`LoginHost:LoginPort` (habitualmente 127.0.0.1:9958) y
+`GameHost:GamePort` (habitualmente 127.0.0.1:5816). En estado OFFLINE,
+comprobar el servidor Redux y su archivo `NOMBRE-PC.ini`; no ingresar
+contraseñas reales en el login experimental. Las pruebas TCP no implican
+compatibilidad de protocolo.
+
+En Windows PowerShell:
+
+```powershell
+Test-NetConnection 127.0.0.1 -Port 9958
+Test-NetConnection 127.0.0.1 -Port 5816
+```

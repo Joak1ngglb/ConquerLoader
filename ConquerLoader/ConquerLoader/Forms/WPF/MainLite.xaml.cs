@@ -357,14 +357,21 @@ namespace ConquerLoader.Forms.WPF
         {
             if (AllStarted && LoaderConfig != null && LoaderConfig.DefaultServer != null)
             {
-                bool online = Core.ServerAvailable(LoaderConfig.DefaultServer.LoginHost, LoaderConfig.DefaultServer.GamePort);
+                // A game connection and a login connection are two separate listeners in Redux.
+                // Diagnose both ports. An isolated check of GamePort can misleadingly display
+                // OFFLINE without showing whether the auth service is actually reachable.
+                var server = LoaderConfig.DefaultServer;
+                bool loginReady = Core.ServerAvailable(server.LoginHost, server.LoginPort);
+                bool gameReady = Core.ServerAvailable(server.GameHost, server.GamePort);
+                bool online = loginReady && gameReady;
                 serverStatus.Text = online
                     ? T("mainServerStatusOnline", "ONLINE")
                     : T("mainServerStatusOffline", "OFFLINE");
                 serverStatusBadge.Background = online ? CreateBrush("#15803D") : CreateBrush("#B91C1C");
-                txtServerStatusHint.Text = online
-                    ? T("mainSelectedServerStatusOnline", "The selected server responded to the reachability check.")
-                    : T("mainSelectedServerStatusOffline", "The selected server did not respond. You can still review the configuration in Settings.");
+                txtServerStatusHint.Text =
+                    "Login " + server.LoginHost + ":" + server.LoginPort + (loginReady ? " OK" : " sin respuesta") +
+                    " | Juego " + server.GameHost + ":" + server.GamePort + (gameReady ? " OK" : " sin respuesta") +
+                    (online ? " - ambas conexiones responden." : " - Iniciá Redux y verificá su INI.");
             }
         }
 

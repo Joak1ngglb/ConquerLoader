@@ -14,13 +14,17 @@ Assert ($hook.Contains('if (allAttached && committed == NO_ERROR)')) 'An aborted
 Assert ($hook.Contains('connect route=%s redirected=%s original=%s:%d target=%s:%d')) 'Connection redirection logging missing.'
 Assert ($hook.Contains('getpeername') -and $hook.Contains('verified=%s')) 'Actual peer verification missing.'
 Assert ($hook.Contains('payload is read-only') -and $hook.Contains('forwarded byte-for-byte')) '5065 authentication traffic must be pass-through.'
+Assert ($hook.Contains('login-copy header declaredLength=%u type=%u classification=%s') -and
+        $hook.Contains('MsgMacAddress(1100)') -and $hook.Contains('fields redacted')) 'Login copy observer must classify only redacted headers.'
+Assert ($hook.Contains('HeapAlloc(GetProcessHeap()') -and $hook.Contains('g_authObserver5065->Decrypt(observed,len)')) 'Header inspection must decrypt a private copy.'
 $send5065=$hook.Substring($hook.IndexOf('if(ClientVersion==5065)'))
 $send5065=$send5065.Substring(0,$send5065.IndexOf('else if (legacy'))
-Assert (-not $send5065.Contains('Decrypt(') -and -not $send5065.Contains('Encrypt(') -and
-        -not $send5065.Contains('memcpy') -and -not $send5065.Contains('szPassword')) '5065 send observer must not inspect or mutate credentials.'
+Assert (-not $send5065.Contains('Decrypt(buf') -and -not $send5065.Contains('Encrypt(buf') -and
+        -not $send5065.Contains('memcpy') -and -not $send5065.Contains('szPassword')) '5065 send observer must not mutate the transmitted credential buffer.'
 Assert ($hook.Contains('__declspec(thread) LONG g_sendHookDepth') -and
         $hook.Contains('ESP-before=') -and $hook.Contains('calling-convention-balanced=')) 'Recursion/stack/calling-convention diagnostics missing.'
 Assert ($hook.Contains('LogExceptionStack5065') -and $hook.Contains('ebp-return') -and $hook.Contains('esp-code')) 'Crash call trace missing.'
+Assert ($hook.Contains('NearestExport5065') -and $hook.Contains('crash-code return=')) 'Crash export/call-site diagnostics missing.'
 Assert ($hook.Contains('ConquerLoader-Protocol5065-%s-%lu') -and
         $early.Contains('ConquerLoader-Protocol5065-Ready-') -and
         $early.Contains('ConquerLoader-Protocol5065-Failed-')) 'Launcher must wait for protocol hook readiness/failure.'

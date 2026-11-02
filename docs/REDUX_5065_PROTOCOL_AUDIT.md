@@ -51,3 +51,32 @@ ejecutables encontrados desde ESP. Esto permite distinguir recursión
 y una cadena EBP no monótona, además de obtener módulos y offsets de la traza.
 La eliminación del riesgo está validada por código y pruebas; la
 resolución del crash requiere todavía una ejecución con el cliente real.
+
+## Evidencia del Build 57
+
+En Windows 11 x86, el RVA `MSVCRT.dll+0x8DC4A` cae dentro del export
+`memcpy` (`memcpy+0x5A`) de `msvcrt.dll` 7.0.26100.9711. Esto demuestra que la
+infracción ocurre durante una copia de memoria del cliente, no dentro del
+trampoline `send`. Sin el `Conquer.exe` exacto no es posible desensamblar de
+forma responsable los callers `0x004BB9D8`, `0x004BA0BC` y `0x0046A7D8`.
+
+El diagnóstico registra ahora el export más cercano y una ventana de código
+alrededor de los primeros return addresses. También mantiene un duplicado del
+estado del cifrado de login y descifra **sólo una copia privada** de cada envío
+para registrar exclusivamente longitud declarada y tipo. Nunca registra los
+campos de cuenta, contraseña, servidor ni MAC, y el buffer transmitido sigue
+intacto.
+
+## Selector de reinos del SWF original
+
+El login Flash 5065 conserva la lista visual de reinos oficiales (por ejemplo
+Dark, Light y Fire). Eso no implica que el cliente esté conectando a esos
+servidores: el hook verifica con `getpeername` que cualquier conexión de login
+del rango legado termine realmente en Redux. El nombre seleccionado continúa
+viajando dentro del paquete 1051 original, pero Redux autentica la cuenta sin
+usar ese nombre como destino de red.
+
+La captura del Build 57 confirma que el cliente usa este flujo multirreino. No
+se reemplaza ni se modifica el SWF. El nuevo observador permitirá confirmar en
+la siguiente ejecución si el segundo paquete de 28 bytes es el suplementario
+1100; hasta disponer de ese log no se lo identifica por su longitud solamente.

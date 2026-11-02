@@ -47,6 +47,8 @@ sockaddr_in g_expectedGame = {};
 __declspec(thread) LONG g_sendHookDepth = 0;
 PBYTE handler_stub;
 CLegacyCipher* legacy;
+CLegacyCipher* g_authObserver5065=NULL;
+SRWLOCK g_authObserverLock=SRWLOCK_INIT;
 int ClientVersion = 0, EnableHostName = 0, UpdatedIPS = 0, DisableAutoFixFlash = 0;
 BYTE patternDynamic = 0x4F;
 char HostName[32] = "";
@@ -179,6 +181,14 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 			legacy = new CLegacyCipher();
 			legacy->GenerateIV(0x13FA0F9D, 0x6D5C7962);
 		}
+		else {
+			AcquireSRWLockExclusive(&g_authObserverLock);
+			if(g_authObserver5065)delete g_authObserver5065;
+			g_authObserver5065=new CLegacyCipher();
+			if(g_authObserver5065)g_authObserver5065->GenerateIV(0x13FA0F9D,0x6D5C7962);
+			ReleaseSRWLockExclusive(&g_authObserverLock);
+			Flash5065Trace("5065 login observer initialized; it decrypts only a private copy to classify headers and never logs payload fields.");
+		}
 	}
 	else if (rPort == 5816)
 	{
@@ -245,8 +255,32 @@ int __stdcall csv3_send(SOCKET s, PBYTE buf, int len, int flags)
 		sprintf_s(wireLog,"send entry route=%s peer=%s:%d verified=%s length=%d depth=%ld; payload is read-only.",
 			route,peerIp,peerPort,verified?"yes":"NO",len,depth);
 		Flash5065Trace(wireLog);
+		if(s==g_loginSocket && buf && len>0 && len<=0x10000) {
+			BYTE* observed=reinterpret_cast<BYTE*>(HeapAlloc(GetProcessHeap(),0,static_cast<SIZE_T>(len)));
+			if(observed) {
+				for(int i=0;i<len;i++)observed[i]=buf[i];
+				bool decoded=false;
+				AcquireSRWLockExclusive(&g_authObserverLock);
+				if(g_authObserver5065){g_authObserver5065->Decrypt(observed,len);decoded=true;}
+				else Flash5065Trace("ERROR: 5065 login observer cipher is unavailable; header not classified.");
+				ReleaseSRWLockExclusive(&g_authObserverLock);
+				if(len>=4 && decoded) {
+					unsigned declared=static_cast<unsigned>(observed[0]|(observed[1]<<8));
+					unsigned type=static_cast<unsigned>(observed[2]|(observed[3]<<8));
+					const char* classification="unknown";
+					if(declared==52 && type==1051)classification="MsgAccount(1051)";
+					else if(declared==28 && type==1100)classification="MsgMacAddress(1100)";
+					else if(declared==28 && type==1052)classification="MsgConnect(1052)-unexpected-on-login";
+					sprintf_s(wireLog,"login-copy header declaredLength=%u type=%u classification=%s sendLength=%d; fields redacted.",
+						declared,type,classification,len);
+					Flash5065Trace(wireLog);
+				}
+				HeapFree(GetProcessHeap(),0,observed);
+			}
+			else Flash5065Trace("ERROR: 5065 login observer allocation failed; original send remains untouched.");
+		}
 		if(s==g_loginSocket && len==ReduxAccountLayout5065::Size)
-			Flash5065Trace("Redux AccountEx candidate: 52-byte encrypted payload forwarded byte-for-byte; account@4, RC5 password@20 and server@36 were not read or modified.");
+			Flash5065Trace("Redux AccountEx candidate: 52-byte encrypted payload forwarded byte-for-byte; account@4, RC5 password@20 and server@36 were not logged or modified.");
 		else if(s==g_gameSocket && len==ReduxGameConnect5065::Size)
 			Flash5065Trace("Redux MsgConnect(1052) candidate: 28-byte game payload forwarded byte-for-byte; type confirmation remains server-side because the game stream is encrypted.");
 		else if(s==g_loginSocket || s==g_gameSocket)
@@ -402,15 +436,55 @@ static bool ExecutableAddress5065(DWORD address) {
     return protection==PAGE_EXECUTE || protection==PAGE_EXECUTE_READ ||
         protection==PAGE_EXECUTE_READWRITE || protection==PAGE_EXECUTE_WRITECOPY;
 }
+static void NearestExport5065(HMODULE module,DWORD address,const char*& name,DWORD& delta) {
+    name=NULL;delta=0;
+    if(!module)return;
+    BYTE* image=reinterpret_cast<BYTE*>(module);
+    PIMAGE_DOS_HEADER dos=reinterpret_cast<PIMAGE_DOS_HEADER>(image);
+    if(dos->e_magic!=IMAGE_DOS_SIGNATURE)return;
+    PIMAGE_NT_HEADERS32 nt=reinterpret_cast<PIMAGE_NT_HEADERS32>(image+dos->e_lfanew);
+    if(nt->Signature!=IMAGE_NT_SIGNATURE)return;
+    IMAGE_DATA_DIRECTORY directory=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if(!directory.VirtualAddress || directory.VirtualAddress>=nt->OptionalHeader.SizeOfImage)return;
+    PIMAGE_EXPORT_DIRECTORY exports=reinterpret_cast<PIMAGE_EXPORT_DIRECTORY>(image+directory.VirtualAddress);
+    DWORD* functions=reinterpret_cast<DWORD*>(image+exports->AddressOfFunctions);
+    DWORD* names=reinterpret_cast<DWORD*>(image+exports->AddressOfNames);
+    WORD* ordinals=reinterpret_cast<WORD*>(image+exports->AddressOfNameOrdinals);
+    DWORD target=address-static_cast<DWORD>(reinterpret_cast<DWORD_PTR>(module));
+    DWORD nearest=0;
+    for(DWORD i=0;i<exports->NumberOfNames;i++) {
+        WORD ordinal=ordinals[i]; if(ordinal>=exports->NumberOfFunctions)continue;
+        DWORD rva=functions[ordinal];
+        if(rva<=target && rva>=nearest) {nearest=rva;name=reinterpret_cast<const char*>(image+names[i]);}
+    }
+    if(name)delta=target-nearest;
+}
+static void LogCodeWindow5065(DWORD returnAddress) {
+    if(returnAddress<12)return;
+    BYTE bytes[24]={};
+    for(unsigned i=0;i<sizeof(bytes);i++) {
+        DWORD value=0;
+        if(!ReadDword5065(returnAddress-12+(i&~3),value))return;
+        bytes[i]=reinterpret_cast<BYTE*>(&value)[i&3];
+    }
+    char hex[sizeof(bytes)*2+1]={}; const char digits[]="0123456789ABCDEF";
+    for(unsigned i=0;i<sizeof(bytes);i++){hex[i*2]=digits[bytes[i]>>4];hex[i*2+1]=digits[bytes[i]&15];}
+    char line[180]={};wsprintfA(line,"crash-code return=0x%08lX window[-12,+11]=%s.",returnAddress,hex);
+    Flash5065Trace(line);
+}
 static void LogCodeAddress5065(const char* kind,unsigned index,DWORD address) {
     MEMORY_BASIC_INFORMATION memory={}; char module[MAX_PATH]="unknown"; DWORD offset=0;
+    const char* exportName=NULL;DWORD exportDelta=0;
     if(VirtualQuery(reinterpret_cast<LPCVOID>(address),&memory,sizeof(memory)) && memory.AllocationBase) {
         GetModuleFileNameA(reinterpret_cast<HMODULE>(memory.AllocationBase),module,MAX_PATH);
         offset=address-static_cast<DWORD>(reinterpret_cast<DWORD_PTR>(memory.AllocationBase));
+        NearestExport5065(reinterpret_cast<HMODULE>(memory.AllocationBase),address,exportName,exportDelta);
     }
     char line[640]={};
-    wsprintfA(line,"crash-stack %s[%u]=0x%08lX module=%s+0x%08lX.",kind,index,address,module,offset);
+    wsprintfA(line,"crash-stack %s[%u]=0x%08lX module=%s+0x%08lX nearest-export=%s+0x%08lX.",
+        kind,index,address,module,offset,exportName?exportName:"unknown",exportDelta);
     Flash5065Trace(line);
+    if(index<4)LogCodeWindow5065(address);
 }
 static void LogExceptionStack5065(const CONTEXT* context) {
     if(!context)return;
@@ -816,6 +890,9 @@ void csv3_shutdown()
     }
     if(g_protocolReadyEvent){CloseHandle(g_protocolReadyEvent);g_protocolReadyEvent=NULL;}
     if(g_protocolFailedEvent){CloseHandle(g_protocolFailedEvent);g_protocolFailedEvent=NULL;}
+    AcquireSRWLockExclusive(&g_authObserverLock);
+    if(g_authObserver5065){delete g_authObserver5065;g_authObserver5065=NULL;}
+    ReleaseSRWLockExclusive(&g_authObserverLock);
     g_loginSocket=INVALID_SOCKET; g_gameSocket=INVALID_SOCKET;
     SecureZeroMemory(szPassword,sizeof(szPassword));
 }

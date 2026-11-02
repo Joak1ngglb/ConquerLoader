@@ -357,15 +357,67 @@ namespace ConquerLoader.Forms.WPF
         {
             if (AllStarted && LoaderConfig != null && LoaderConfig.DefaultServer != null)
             {
-                bool online = Core.ServerAvailable(LoaderConfig.DefaultServer.LoginHost, LoaderConfig.DefaultServer.GamePort);
+                // A game connection and a login connection are two separate listeners in Redux.
+                // Diagnose both ports. An isolated check of GamePort can misleadingly display
+                // OFFLINE without showing whether the auth service is actually reachable.
+                var server = LoaderConfig.DefaultServer;
+                bool loginReady = Core.ServerAvailable(server.LoginHost, server.LoginPort);
+                bool gameReady = Core.ServerAvailable(server.GameHost, server.GamePort);
+                bool online = loginReady && gameReady;
                 serverStatus.Text = online
                     ? T("mainServerStatusOnline", "ONLINE")
                     : T("mainServerStatusOffline", "OFFLINE");
                 serverStatusBadge.Background = online ? CreateBrush("#15803D") : CreateBrush("#B91C1C");
-                txtServerStatusHint.Text = online
-                    ? T("mainSelectedServerStatusOnline", "The selected server responded to the reachability check.")
-                    : T("mainSelectedServerStatusOffline", "The selected server did not respond. You can still review the configuration in Settings.");
+                txtServerStatusHint.Text =
+                    "Login " + server.LoginHost + ":" + server.LoginPort + (loginReady ? " OK" : " sin respuesta") +
+                    " | Juego " + server.GameHost + ":" + server.GamePort + (gameReady ? " OK" : " sin respuesta") +
+                    (online ? " - ambas conexiones responden." : " - Iniciá Redux y verificá su INI.");
             }
+        }
+
+        // The 5065 Flash UI is a 32-bit ActiveX COM control. A Flash.ocx file
+        // in the game folder is not sufficient. Do not silently register it or
+        // redirect a licensed current runtime to the bundled 2007 file.
+        // Flash for Conquer 5065 is distributed as a local ActiveX OCX.
+        // The loader does not register it globally: the hook resolves its
+        // COM class factory from the chosen local module, if compatible.
+        private bool ConfirmLocalFlashFor5065(string clientDirectory)
+        {
+            var path = Path.Combine(clientDirectory, "Flash.ocx");
+            if (!File.Exists(path))
+            {
+                MessageBox.Show(
+                    "No se encontro Flash.ocx en la carpeta del cliente. " +
+                    "El modo Flash original necesita un Flash.ocx x86 local, " +
+                    "preferiblemente de origen confiable. El loader NO lo instala.",
+                    ProductNameText, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+
+            try
+            {
+                // Inspect the actual OCX rather than trusting the filename.
+                // A legacy OCX is executable code and can be unsafe.
+                var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(path);
+                int major = info.FileMajorPart;
+                if (major < 30)
+                {
+                    var proceed = MessageBox.Show(
+                        "Flash.ocx encontrado, version " + info.FileVersion +
+                        ". Es un control antiguo sin soporte y puede tener fallas " +
+                        "de seguridad. Para probarlo, usa una maquina virtual " +
+                        "aislada. ¿Continuar en este entorno bajo tu responsabilidad?",
+                        ProductNameText, MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                    return proceed == MessageBoxResult.Yes;
+                }
+            }
+            catch (Exception ex) when (ex is System.IO.IOException || ex is UnauthorizedAccessException)
+            {
+                MessageBox.Show("No se pudo verificar Flash.ocx: " + ex.Message,
+                    ProductNameText, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+            return true;
         }
 
         private void BtnStart_Click(object sender, RoutedEventArgs e)
@@ -380,6 +432,12 @@ namespace ConquerLoader.Forms.WPF
                 SelectedServer = LoaderConfig.Servers.Where(x => x.ServerName == lstServers.SelectedItem.ToString()).FirstOrDefault();
                 if (SelectedServer != null)
                 {
+                    if (SelectedServer.ServerVersion == 5065 &&
+                        LoaderConfig.UseOriginalFlashLogin &&
+                        !ConfirmLocalFlashFor5065(WinForms.Application.StartupPath))
+                    {
+                        return;
+                    }
                     LoaderConfig.DefaultServer = SelectedServer;
                     Core.SaveLoaderConfig(LoaderConfig);
 
@@ -417,7 +475,20 @@ namespace ConquerLoader.Forms.WPF
                         + Environment.NewLine + "HOSTNAME=" + SelectedServer.Hostname
                         + Environment.NewLine + "SERVER_VERSION=" + SelectedServer.ServerVersion
                         + Environment.NewLine + "SERVERNAME_MEMORYADDRESS=" + SelectedServer.ServerNameMemoryAddress
-                        + Environment.NewLine + "DISABLE_AUTOFIX_FLASH=" + (LoaderConfig.DisableAutoFixFlash ? "1" : "0"));
+                        + Environment.NewLine + "DISABLE_AUTOFIX_FLASH=" +
+                            ((LoaderConfig.DisableAutoFixFlash && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
+                        + Environment.NewLine + "FLASHLESS_NATIVE_LOGIN=" +
+                            ((SelectedServer.ServerVersion == 5065 && !LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
+                        + Environment.NewLine + "EARLY_FLASH5065=" +
+                            ((SelectedServer.ServerVersion == 5065 && LoaderConfig.UseOriginalFlashLogin) ? "1" : "0")
+                        + Environment.NewLine + "FLASH5065_DIAGNOSTIC_MODE=" +
+                            Math.Max(0, Math.Min(3, LoaderConfig.Flash5065DiagnosticMode)));
+                    Core.LogWritter.Write("5065 login mode: " +
+                        (LoaderConfig.UseOriginalFlashLogin ? "original local Flash ActiveX (no global COM registration)" : "native Win32 without Flash"));
+
+                    if (SelectedServer.ServerVersion == 5065 && LoaderConfig.UseOriginalFlashLogin)
+                        Core.LogWritter.Write("[EarlyFlash5065] Diagnostic mode=" +
+                            LoaderConfig.Flash5065DiagnosticMode + " (0=full,1=Flash+COM,2=LoadLibrary only,3=no Flash hook)");
 
                     Core.LogWritter.Write("Created the Hook Configuration");
 
@@ -468,7 +539,14 @@ namespace ConquerLoader.Forms.WPF
             string pathToConquerExe = Path.Combine(WinForms.Application.StartupPath, SelectedServer.ExecutableName);
             string workingDir = Path.GetDirectoryName(pathToConquerExe);
             bool noUseDX8DX9 = true;
-            bool useDecryptedServerDat = true;
+            // 5065 uses the legacy CLHook and does NOT use the decrypted server.dat
+            // or the 5717+ COFlashFixer/COHook path. Keep these modes isolated.
+            bool useDecryptedServerDat =
+                SelectedServer.ServerVersion >= Constants.MinVersionCreateFlashFix &&
+                SelectedServer.ServerVersion <= Constants.MaxVersionUseRAWServerDat;
+            HookDLL = useDecryptedServerDat ? "COHook.dll" : LegacyHookDLL;
+            Core.LogWritter.Write("Client " + SelectedServer.ServerVersion +
+                " hook: " + HookDLL + ", decryptedServerDat=" + useDecryptedServerDat);
             bool alreadyUsingLoader = Process.GetProcessesByName(Process.GetCurrentProcess().ProcessName).Length > 1;
             if (alreadyUsingLoader) Core.LogWritter.Write("Detected already using ConquerLoader.");
 
@@ -571,12 +649,26 @@ namespace ConquerLoader.Forms.WPF
                 return;
             }
 
-            Process conquerProc = Process.Start(new ProcessStartInfo
-            {
-                FileName = pathToConquerExe,
-                WorkingDirectory = workingDir,
-                Arguments = "blacknull"
-            });
+            // Dragon's main innovation: install the Flash hook BEFORE the game
+            // entry point. Process.Start followed by Injector.StartInjection
+            // often runs too late for 5065's early ActiveX initialization.
+            // Both 5065 paths must load before the entry point. Native mode has
+            // to bypass the Flash version path before the client reaches it;
+            // Flash mode has to install its optional local COM redirect early.
+            bool early5065Injection =
+                SelectedServer.ServerVersion == 5065 && !CustomDLLs;
+            Process conquerProc = early5065Injection
+                ? EarlyInjectedClient.Launch(
+                    pathToConquerExe, workingDir,
+                    Path.Combine(workingDir, HookDLL),
+                    LoaderConfig.UseOriginalFlashLogin,
+                    message => Core.LogWritter.Write("[Early5065] " + message))
+                : Process.Start(new ProcessStartInfo
+                {
+                    FileName = pathToConquerExe,
+                    WorkingDirectory = workingDir,
+                    Arguments = "blacknull"
+                });
 
             if (conquerProc == null)
             {
@@ -585,7 +677,14 @@ namespace ConquerLoader.Forms.WPF
                 return;
             }
 
-            Core.LogWritter.Write("Process launched!");
+            Core.LogWritter.Write("Process launched! PID=" + conquerProc.Id);
+            if (conquerProc.HasExited)
+            {
+                Core.LogWritter.Write("[EarlyFlash5065] Conquer.exe already exited. ExitCode=0x" +
+                    conquerProc.ExitCode.ToString("X8"));
+                ShowWarning("Conquer.exe se cerro al iniciar. Revisa conquerloader.log y CLHook-5065.log.");
+                return;
+            }
 
             if (CustomDLLs)
             {
@@ -639,7 +738,8 @@ namespace ConquerLoader.Forms.WPF
 
             if (useDecryptedServerDat)
             {
-                if (SelectedServer.ServerVersion <= 6186)
+                if (SelectedServer.ServerVersion >= Constants.MinVersionCreateFlashFix &&
+                    SelectedServer.ServerVersion <= 6186)
                 {
                     if (!Injector.StartInjection(WinForms.Application.StartupPath + @"\COFlashFixer.dll", (uint)conquerProc.Id, worker).Injected)
                     {
@@ -693,6 +793,15 @@ namespace ConquerLoader.Forms.WPF
             else
             {
                 if (CustomDLLs) return;
+                // Early APC already injected the hook; injecting a second time
+                // risks corrupting Detours and reinstating the Flash error.
+                if (early5065Injection)
+                {
+                    Core.LogWritter.Write("[Early5065] Skipping late duplicate CLHook injection.");
+                    worker.ReportProgress(99);
+                    worker.ReportProgress(100);
+                    return;
+                }
 
                 if (!Injector.StartInjection(WinForms.Application.StartupPath + @"\" + HookDLL, (uint)conquerProc.Id, worker).Injected)
                 {
@@ -710,10 +819,31 @@ namespace ConquerLoader.Forms.WPF
 
         private void ConquerProc_Exited(object sender, EventArgs e)
         {
-            if (Process.GetProcessesByName(SelectedServer.ExecutableName.Replace(".exe", "")).Count() <= 0)
+            Process exited = sender as Process;
+            int? exitCode = null;
+            try { if (exited != null) exitCode = exited.ExitCode; }
+            catch (InvalidOperationException) { }
+            Core.LogWritter.Write("[Conquer5065] Conquer.exe finalizo. PID=" +
+                (exited != null ? exited.Id.ToString() : "?") +
+                ", ExitCode=" + (exitCode.HasValue ? "0x" + exitCode.Value.ToString("X8") : "desconocido"));
+
+            if (SelectedServer != null && SelectedServer.ServerVersion == 5065)
             {
-                Environment.Exit(0);
+                // Keep the launcher open, retaining its log, instead of silently
+                // closing the app and hiding the cause of the client crash.
+                if (!exitCode.HasValue || exitCode.Value != 0)
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        ShowWarning("Conquer.exe se cerro inesperadamente. Codigo: " +
+                            (exitCode.HasValue ? "0x" + exitCode.Value.ToString("X8") : "desconocido") +
+                            ". En la carpeta del cliente revisa conquerloader.log y CLHook-5065.log.");
+                    }));
+                return;
             }
+
+            if (SelectedServer != null &&
+                Process.GetProcessesByName(SelectedServer.ExecutableName.Replace(".exe", "")).Length <= 0)
+                Environment.Exit(0);
         }
 
         private void Worker_ProgressChanged(object sender, ProgressChangedEventArgs e)

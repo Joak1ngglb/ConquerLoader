@@ -15,6 +15,11 @@ namespace CLCore.Models
         public bool FullScreen { get; set; }
         public bool ServernameChange { get; set; }
         public bool DisableAutoFixFlash { get; set; }
+        // Switch for licensed, system-registered 32-bit ActiveX Flash (not the embedded 2007 OCX).
+        public bool UseOriginalFlashLogin { get; set; }
+        // 0=all hooks, 1=Flash+COM only, 2=Flash LoadLibrary only, 3=no Flash hooks.
+        // The diagnostic setting is only consumed by early-injected Conquer 5065.
+        public int Flash5065DiagnosticMode { get; set; }
         public string Title { get; set; }
         public string Description { get; set; }
         public string Lang { get; set; }

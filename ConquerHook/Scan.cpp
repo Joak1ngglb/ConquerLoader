@@ -32,7 +32,11 @@ LPVOID FindMemoryPattern(PBYTE pattern, bool* wildCards, int len)
 	BYTE *buffer = new BYTE[size];
 	ReadProcessMemory(GetCurrentProcess(), mod, buffer, size, NULL);
 	LPVOID found = NULL;
-	for (DWORD i = 0; i < size; i++)
+	if (len <= 0 || size < static_cast<DWORD>(len)) {
+		delete[] buffer;
+		return NULL;
+	}
+	for (DWORD i = 0; i <= size - static_cast<DWORD>(len); i++)
 	{
 		bool match = true;
 		for (int j = 0; j < len; j++)

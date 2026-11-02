@@ -1,23 +1,37 @@
-/**
-* This fix has been created by Ultimation from Elitepvpers :]
-* From: https://www.elitepvpers.com/forum/co2-pserver-guides-releases/4858019-release-flash-fix-old-clients.html
-*/
-
+#pragma once
 #include "stdafx.h"
 #include <windows.h>
+#include <objbase.h>
 #include "detours.h"
-#include <iostream>
-#pragma once
 
-class CFlashFix
-{
-	typedef HMODULE(_stdcall* HookLoadLibrary)(_In_ LPCWSTR lpLibFileName,
-		_Reserved_ HANDLE hFile,
-		_In_ DWORD dwFlags);
+class CFlashFix {
 public:
-	static void Hook();
-	static HookLoadLibrary pLoadLibrary;
-	static  HMODULE _stdcall LoadLibraryDetour(_In_ LPCWSTR lpLibFileName,
-		_Reserved_ HANDLE hFile,
-		_In_ DWORD dwFlags);
+    typedef HMODULE (WINAPI* HookLoadLibrary)(LPCWSTR,HANDLE,DWORD);
+    typedef HRESULT (WINAPI* HookCoCreateInstance)(REFCLSID,LPUNKNOWN,DWORD,REFIID,LPVOID*);
+    typedef HRESULT (WINAPI* HookCoGetClassObject)(REFCLSID,DWORD,COSERVERINFO*,REFIID,LPVOID*);
+    typedef HRESULT (WINAPI* HookCLSIDFromProgID)(LPCOLESTR,LPCLSID);
+    typedef HRESULT (WINAPI* HookLoadRegTypeLib)(REFGUID,WORD,WORD,LCID,ITypeLib**);
+    typedef HRESULT (WINAPI* HookQueryPathOfRegTypeLib)(REFGUID,USHORT,USHORT,LCID,LPBSTR);
+    enum ActivationStage {
+        StageNotStarted=0,StageInstallingHooks,StageHooksActive,StagePreflight,
+        StageLoadingOcx,StageClassFactory,StageCreateInstance,StageReady,StageFailed
+    };
+
+    static HookLoadLibrary pLoadLibrary;
+    static HookCoCreateInstance pCoCreateInstance;
+    static HookCoGetClassObject pCoGetClassObject;
+    static HookCLSIDFromProgID pCLSIDFromProgID;
+    static HookLoadRegTypeLib pLoadRegTypeLib;
+    static HookQueryPathOfRegTypeLib pQueryPathOfRegTypeLib;
+
+    static HRESULT Hook(bool enableComFallback=true);
+    static HRESULT PreflightLocalControl();
+    static void PublishStartupFailure();
+    static const char* StageName();
+    static HMODULE WINAPI LoadLibraryDetour(LPCWSTR,HANDLE,DWORD);
+    static HRESULT WINAPI CoCreateInstanceDetour(REFCLSID,LPUNKNOWN,DWORD,REFIID,LPVOID*);
+    static HRESULT WINAPI CoGetClassObjectDetour(REFCLSID,DWORD,COSERVERINFO*,REFIID,LPVOID*);
+    static HRESULT WINAPI CLSIDFromProgIDDetour(LPCOLESTR,LPCLSID);
+    static HRESULT WINAPI LoadRegTypeLibDetour(REFGUID,WORD,WORD,LCID,ITypeLib**);
+    static HRESULT WINAPI QueryPathOfRegTypeLibDetour(REFGUID,USHORT,USHORT,LCID,LPBSTR);
 };

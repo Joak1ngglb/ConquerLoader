@@ -1,0 +1,133 @@
+name: Build ConquerLoader 5065 (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/redux-5065-local-profile
+      - feature/5065-flash-startup-fix
+    paths:
+      - 'ConquerLoader/**'
+      - '.github/workflows/build-conquerloader-5065.yml'
+      - 'profiles/redux-5065.local.json'
+      - 'ConquerHook/**'
+      - 'tests/**'
+      - 'tools/**'
+  pull_request:
+    paths:
+      - 'ConquerLoader/**'
+      - '.github/workflows/build-conquerloader-5065.yml'
+      - 'profiles/redux-5065.local.json'
+      - 'ConquerHook/**'
+      - 'tests/**'
+      - 'tools/**'
+
+jobs:
+  build-loader:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install MSBuild
+        uses: microsoft/setup-msbuild@v2
+      - name: Install NuGet
+        uses: NuGet/setup-nuget@v2
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          # Restore the packages.config files directly. The legacy solution has two CLHook entries
+          # and NuGet 7 rejects duplicate project names when asked to parse the .sln.
+          foreach ($config in @('ConquerLoader/ConquerLoader/packages.config', 'ConquerLoader/CLCore/packages.config', 'ConquerHook/packages.config')) {
+            nuget restore $config -PackagesDirectory 'ConquerLoader/packages' -NonInteractive -Verbosity normal
+            if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed for $config" }
+          }
+      - name: Verify Dragon-style early hook wiring (source regression test)
+        shell: pwsh
+        run: |
+          ./tests/Test-EarlyFlash5065.ps1
+          ./tests/Test-NativeLogin5065.ps1
+          ./tests/Test-FlashCom5065.ps1
+          ./tests/Test-FlashDiagnostics5065.ps1
+          ./tests/Test-ProtocolHooks5065.ps1
+          ./tests/Test-ProtocolPackets5065.ps1
+      - name: Verify staged Flash diagnostic behavior
+        shell: pwsh
+        run: |
+          $profile = Get-Content 'profiles/redux-5065.local.json' -Raw | ConvertFrom-Json
+          if (-not $profile.UseOriginalFlashLogin) { throw 'Original Flash login must be default' }
+          if ($profile.Flash5065DiagnosticMode -ne 0) { throw 'Flash profile must use normal networking' }
+          if (-not (Test-Path tools/Diagnose-Crash5065.ps1)) { throw 'Crash reporter missing' }
+      - name: Compile launcher (Release x86, .NET Framework 4.6.2)
+        shell: pwsh
+        run: |
+          msbuild 'ConquerLoader/ConquerLoader/ConquerLoader.csproj' /t:Rebuild /p:Configuration=Release /p:Platform=AnyCPU /m /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'ConquerLoader compilation failed' }
+      - name: Validate Redux 5065 profile and backup behavior
+        shell: pwsh
+        run: |
+          ./tests/Test-Redux5065.ps1
+      - name: Exercise read-only Flash diagnostics on a synthetic client
+        shell: pwsh
+        run: |
+          $folder = Join-Path $env:RUNNER_TEMP 'test-flash5065'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          [IO.File]::WriteAllText((Join-Path $folder 'Conquer.exe'), 'Synthetic client only')
+          [IO.File]::WriteAllText((Join-Path $folder 'Flash.ocx'), 'Synthetic placeholder only')
+          Copy-Item 'profiles/redux-5065.local.json' (Join-Path $folder 'config.json')
+          ./tools/Diagnose-Flash5065.ps1 -ClientDirectory $folder
+      - name: Compile native Win32 CLHook with Flash fix
+        shell: pwsh
+        run: |
+          msbuild 'ConquerHook/CLHook.vcxproj' /t:Rebuild /p:Configuration=Release /p:Platform=Win32 /m:1 /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to build flash-aware CLHook.dll' }
+          $hooks = @(Get-ChildItem -Path 'ConquerHook' -Recurse -Filter 'CLHook.dll' -File |
+            Where-Object { $_.FullName -notmatch '[\\/]obj[\\/]' } |
+            Sort-Object LastWriteTime -Descending)
+          if ($hooks.Count -eq 0) { throw 'Native CLHook.dll was not produced' }
+          Copy-Item -LiteralPath $hooks[0].FullName -Destination "$env:GITHUB_WORKSPACE/FlashFix-CLHook.dll" -Force
+          Write-Host "Native hook built: $($hooks[0].FullName)"
+      - name: Assemble local Redux 5065 bundle
+        shell: pwsh
+        run: |
+          $source = 'ConquerLoader/Release'
+          $dist = 'dist/ConquerLoader-Redux-5065'
+          if (-not (Test-Path "$source/ConquerLoader.exe" -PathType Leaf)) { throw 'Missing ConquerLoader.exe' }
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          Copy-Item "$source/*" $dist -Recurse -Force
+          Copy-Item 'profiles/redux-5065.local.json' "$dist/config.json" -Force
+          Copy-Item 'tools/Diagnose-Flash5065.ps1' "$dist/Diagnose-Flash5065.ps1" -Force
+          Copy-Item 'tools/Diagnose-Crash5065.ps1' "$dist/Diagnose-Crash5065.ps1" -Force
+          Copy-Item 'FlashFix-CLHook.dll' "$dist/CLHook.dll" -Force
+          if (-not (Test-Path "$dist/CLHook.dll")) { throw 'Missing native Flash-enabled legacy hook' }
+          Write-Host "Distributed CLHook from native source: $((Get-Item "$dist/CLHook.dll").Length) bytes"
+          @'
+          Configuracion para Redux + cliente Conquer Online 5065.
+          1. Copia el contenido completo junto a Conquer.exe en una carpeta de prueba.
+          2. config.json apunta a 127.0.0.1:9958 (login) y :5816 (juego).
+          3. Si Redux usa otra IP/puertos, configura con tools/Configure-Redux5065.ps1.
+          4. Este 5065 usa CLHook.dll compilado de ConquerHook/ (no COFlashFixer.dll).
+          5. UseOriginalFlashLogin=true (predeterminado): conserva el login SWF original
+             y redirige Flash ActiveX hacia Flash.ocx LOCAL de la carpeta.
+             Activa su class factory local sin registro COM global.
+          6. UseOriginalFlashLogin=false: alternativa Win32 nativa sin Flash.
+          7. No incluye ningun Flash.ocx. Probar un OCX antiguo solo en VM;
+             una DLL local sin firma puede ejecutar codigo no confiable.
+          8. Los cambios de modo se guardan en config.json. Comprueba
+             conquerloader.log si surge algun error de login.
+          9. En ambos modos 5065, CLHook se carga por APC antes del entry point.
+          10. Si falla, ejecuta Diagnose-Crash5065.ps1: resume etapa Flash,
+              HRESULT, excepcion y SHA256 de los tres binarios.
+          11. Usa Windows Defender y prueba componentes antiguos en VM.
+          Compilado en GitHub Actions. No incluye el cliente ni prueba la seguridad de las DLL embebidas.
+          '@ | Set-Content -LiteralPath "$dist/LEEME-Redux5065.txt" -Encoding UTF8
+          Compress-Archive -Path "$dist/*" -DestinationPath 'dist/ConquerLoader-Redux-5065.zip' -Force
+          if (-not (Test-Path 'dist/ConquerLoader-Redux-5065.zip')) { throw 'ZIP was not produced' }
+      - name: Upload compiled launcher (ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConquerLoader-Redux-5065
+          path: dist/ConquerLoader-Redux-5065.zip
+          if-no-files-found: error
+          retention-days: 14

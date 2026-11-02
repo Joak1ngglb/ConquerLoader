@@ -1,0 +1,28 @@
+name: Redux 5065 profile checks
+
+on:
+  push:
+    branches:
+      - master
+      - feature/redux-5065-local-profile
+    paths:
+      - 'profiles/redux-5065.local.json'
+      - 'tools/Configure-Redux5065.ps1'
+      - 'tests/Test-Redux5065.ps1'
+      - '.github/workflows/redux-5065-profile.yml'
+  pull_request:
+    paths:
+      - 'profiles/redux-5065.local.json'
+      - 'tools/Configure-Redux5065.ps1'
+      - 'tests/Test-Redux5065.ps1'
+      - '.github/workflows/redux-5065-profile.yml'
+
+jobs:
+  validate-profile:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Test Redux 5065 setup (Windows PowerShell 5.1)
+        shell: powershell
+        run: .\tests\Test-Redux5065.ps1

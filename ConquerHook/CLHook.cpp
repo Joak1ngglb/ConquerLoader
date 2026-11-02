@@ -54,6 +54,7 @@ CLegacyCipher* g_authInboundObserver5065=NULL;
 SRWLOCK g_authObserverLock=SRWLOCK_INIT;
 BYTE g_authInboundPending5065[1024]={};
 unsigned g_authInboundPendingLength5065=0;
+bool g_authInboundFirstChunk5065=true;
 int ClientVersion = 0, EnableHostName = 0, UpdatedIPS = 0, DisableAutoFixFlash = 0;
 BYTE patternDynamic = 0x4F;
 char HostName[32] = "";
@@ -195,6 +196,7 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 			if(g_authObserver5065)g_authObserver5065->GenerateIV(0x13FA0F9D,0x6D5C7962);
 			if(g_authInboundObserver5065)g_authInboundObserver5065->GenerateIV(0x13FA0F9D,0x6D5C7962);
 			g_authInboundPendingLength5065=0;
+			g_authInboundFirstChunk5065=true;
 			ReleaseSRWLockExclusive(&g_authObserverLock);
 			Flash5065Trace("5065 login observer initialized; it decrypts only a private copy to classify headers and never logs payload fields.");
 		}
@@ -258,9 +260,20 @@ int __stdcall csv3_recv(SOCKET s,char* buf,int len,int flags)
 			for(int i=0;i<result;i++)observed[i]=static_cast<BYTE>(buf[i]);
 			AcquireSRWLockExclusive(&g_authObserverLock);
 			if(g_authInboundObserver5065) {
+				BYTE rawHeader[4]={},legacyHeader[4]={};
+				for(unsigned i=0;i<4 && i<static_cast<unsigned>(result);i++)rawHeader[i]=legacyHeader[i]=observed[i];
 				// Server-to-client auth bytes use the inverse direction of the
 				// legacy transform. Encrypt() here decodes only this private copy.
 				g_authInboundObserver5065->Encrypt(observed,result);
+				if(g_authInboundFirstChunk5065 && result>=4) {
+					CLegacyCipher legacyDirection;legacyDirection.GenerateIV(0x13FA0F9D,0x6D5C7962);legacyDirection.Decrypt(legacyHeader,4);
+					unsigned rawLength=rawHeader[0]|(rawHeader[1]<<8),rawType=rawHeader[2]|(rawHeader[3]<<8);
+					unsigned inverseLength=observed[0]|(observed[1]<<8),inverseType=observed[2]|(observed[3]<<8);
+					unsigned legacyLength=legacyHeader[0]|(legacyHeader[1]<<8),legacyType=legacyHeader[2]|(legacyHeader[3]<<8);
+					char candidates[320]={};sprintf_s(candidates,"login-recv first chunk bytes=%d header-candidates raw=%u:%u redux-inverse=%u:%u legacy-direction=%u:%u; body redacted.",
+						result,rawLength,rawType,inverseLength,inverseType,legacyLength,legacyType);
+					Flash5065Trace(candidates);g_authInboundFirstChunk5065=false;
+				}
 				unsigned available=sizeof(g_authInboundPending5065)-g_authInboundPendingLength5065;
 				unsigned append=static_cast<unsigned>(result)<available?static_cast<unsigned>(result):available;
 				for(unsigned i=0;i<append;i++)g_authInboundPending5065[g_authInboundPendingLength5065+i]=observed[i];
@@ -975,6 +988,7 @@ void csv3_shutdown()
     if(g_authObserver5065){delete g_authObserver5065;g_authObserver5065=NULL;}
     if(g_authInboundObserver5065){delete g_authInboundObserver5065;g_authInboundObserver5065=NULL;}
     g_authInboundPendingLength5065=0;
+    g_authInboundFirstChunk5065=true;
     ReleaseSRWLockExclusive(&g_authObserverLock);
     g_loginSocket=INVALID_SOCKET; g_gameSocket=INVALID_SOCKET;
     SecureZeroMemory(szPassword,sizeof(szPassword));

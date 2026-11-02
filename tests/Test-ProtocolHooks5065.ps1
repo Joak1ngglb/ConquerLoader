@@ -19,6 +19,8 @@ Assert ($hook.Contains('login-copy header declaredLength=%u type=%u classificati
 Assert ($hook.Contains('HeapAlloc(GetProcessHeap()') -and $hook.Contains('g_authObserver5065->Decrypt(observed,len)')) 'Header inspection must decrypt a private copy.'
 Assert ($hook.Contains('csv3_recv') -and $hook.Contains('login-recv header declaredLength=%u type=1055') -and
         $hook.Contains('token and credentials redacted')) 'Read-only 1055 response/redirect diagnostics missing.'
+Assert ($hook.Contains('header-candidates raw=%u:%u redux-inverse=%u:%u legacy-direction=%u:%u') -and
+        $hook.Contains('body redacted')) 'First receive must distinguish plaintext and both auth cipher directions.'
 $send5065=$hook.Substring($hook.IndexOf('if(ClientVersion==5065)'))
 $send5065=$send5065.Substring(0,$send5065.IndexOf('else if (legacy'))
 Assert (-not $send5065.Contains('Decrypt(buf') -and -not $send5065.Contains('Encrypt(buf') -and

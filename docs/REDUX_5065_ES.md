@@ -143,10 +143,12 @@ A partir del commit de implementación del cliente, la rama incorpora
   contra Redux, conservando el protocolo de red del juego.
 - No instala, registra ni carga `Flash.ocx` para el login nativo.
 
-**Estado: EXPERIMENTAL.** Sólo se ha compilado el código y se ha efectuado
-análisis estático del binario. El cliente original todavía contiene rutas
-de ActiveX y su inicialización podría fallar antes de establecer el login
-nativo; no está probado que se pueda jugar o iniciar sesión.
+**Estado actual:** el login nativo es el modo predeterminado, se inyecta antes
+del entry point y valida el SHA-256 exacto
+`97CCC3276D46D46BB91AD62E758D1FB622C036F6224EED5EA7C121A80E550A89`
+antes de aplicar cualquier RVA. La compilación y las pruebas de regresión
+pasan; todavía falta la prueba real con ese `Conquer.exe` y un servidor Redux
+activo para confirmar autenticación y entrada al juego.
 
 Prueba: hacé una copia de la carpeta original, copiá encima el *paquete
 completo* de ConquerLoader de la rama y abrí `ConquerLoader.exe`.
@@ -206,18 +208,13 @@ timestamp y bytes; no toca el ejecutable del disco.
 
 La configuración ahora admite `UseOriginalFlashLogin`:
 
-- `true`: iniciar Conquer 5065 sin parchear su test de Flash ni abrir
-  el formulario nativo; utiliza el objeto COM ActiveX **x86** registrado.
-  Desactiva expresamente el hook `CFlashFix` que antes redirigía al
-  `Flash.ocx` local sin firma de 2007. No instala ni registra ningún OCX.
-- `false`: conserva el prototipo anterior de login nativo sin Flash.
+- `true`: alternativa que conserva el formulario SWF y usa `Flash.ocx` local
+  mediante redirección y class factory sin registro COM global.
+- `false`: login Win32 nativo sin cargar ni registrar `Flash.ocx`.
 
-El perfil incluido en el ZIP usa `UseOriginalFlashLogin=true`, como pidió
-el usuario. Por seguridad, si falta un ActiveX Flash x86 **registrado y con
-archivo real**, el loader advierte antes del arranque. La comprobación
-registra únicamente presencia, no valida licencias, firmas ni
-compatibilidad funcional. Si el runtime es antiguo o no confiable, **no
-lo uses en el Windows principal**, aunque pase la comprobación.
+El perfil incluido en el ZIP usa `UseOriginalFlashLogin=false`. El modo Flash
+queda únicamente como fallback manual y no debe probarse fuera de una VM con
+un OCX x86 de procedencia confiable.
 
 Wipro Engineering (anteriormente HARMAN DTS) informa soporte comercial
 para Flash Player versión 50.0 bajo licencia especial; la disponibilidad
@@ -286,8 +283,8 @@ con `QueueUserAPC(LoadLibraryW)` y reanuda su hilo principal. En el
 ConquerLoader anterior la DLL se inyectaba después de `Process.Start`,
 cuando ya podía haber fallado la inicialización de Flash.
 
-Nuestra implementación `EarlyInjectedClient.cs` usa el mismo orden **solo**
-para Conquer 5065 con `UseOriginalFlashLogin=true`:
+Nuestra implementación `EarlyInjectedClient.cs` usa el mismo orden para
+**ambos modos** de Conquer 5065:
 
 1. Iniciar el ejecutable con `CREATE_SUSPENDED` (x86).
 2. Copiar la ruta absoluta de `CLHook.dll` al proceso.
@@ -313,9 +310,9 @@ Se descubrió un fallo de secuencia: al inyectar `CLHook.dll` desde
 `CreateHook32(GetProcAddress(ws2_32.dll, connect), ...)` aunque la DLL
 Winsock todavía podía no estar lista. El viejo `CreateHook32` no valida
 `NULL` y ejecuta `memcmp` sobre esa dirección, con riesgo de cierre
-inmediato del cliente. La nueva versión solo instala el hook local Flash
-al inicio, difiere el hook de red hasta que `ws2_32.dll` esté cargada y
-comprueba que `connect` sea no nulo.
+inmediato del cliente. En modo nativo la nueva versión no instala hooks Flash;
+difiere `connect`, `send` y `_snprintf` hasta que `ws2_32.dll` y `msvcr90.dll`
+estén cargadas, y usa trampolines Detours en lugar del parche de cinco bytes.
 
 El progreso **100% pertenece al launcher**, no confirma que el juego esté
 visible. Para investigar, el log `CLHook-5065.log` muestra si la DLL se
@@ -342,7 +339,7 @@ al inicio temprano del cliente 5065 con `UseOriginalFlashLogin=true`.
 | Valor | Hook Flash LoadLibrary | Fallback COM | Hook Winsock |
 |---|---|---|---|
 | 0 | Sí | Sí | Sí (normal, experimental) |
-| 1 (predeterminado) | Sí | Sí | No, aislado |
+| 1 | Sí | Sí | No, aislado |
 | 2 | Sí | No | No |
 | 3 | No | No | No; solo carga CLHook |
 

@@ -76,6 +76,11 @@ foreach ($path in @($exe, $ocx, $hook)) {
     Info $name $(if ($present) { 'Presente' } else { 'FALTA' })
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         Info "$name CPU" (Read-ImageMachine $path)
+        if ($name -eq 'Conquer.exe') {
+            $clientHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            Info 'Conquer.exe SHA-256' $clientHash
+            Info 'Conquer.exe compatible con login nativo' ($clientHash -eq '97CCC3276D46D46BB91AD62E758D1FB622C036F6224EED5EA7C121A80E550A89')
+        }
         if ($name -eq 'Flash.ocx') {
             Info 'Flash.ocx SHA-256' ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash)
             $signature = Get-AuthenticodeSignature -LiteralPath $path
@@ -91,6 +96,7 @@ if (Test-Path -LiteralPath $configPath) {
         $cfg = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
         Info 'Perfil version' $cfg.DefaultServer.ServerVersion
         Info 'Perfil Flash auto-fix DESACTIVADO' $cfg.DisableAutoFixFlash
+        Info 'Modo de login' $(if ($cfg.UseOriginalFlashLogin) { 'Flash local (alternativo)' } else { 'Win32 nativo sin Flash' })
         Info 'Perfil ejecutable' $cfg.DefaultServer.ExecutableName
     } catch {
         Write-Warning 'No se pudo leer config.json (sin mostrar contenido).'

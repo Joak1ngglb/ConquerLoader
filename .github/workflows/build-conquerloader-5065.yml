@@ -47,11 +47,13 @@ jobs:
         shell: pwsh
         run: |
           ./tests/Test-EarlyFlash5065.ps1
+          ./tests/Test-NativeLogin5065.ps1
       - name: Verify staged Flash diagnostic behavior
         shell: pwsh
         run: |
           $profile = Get-Content 'profiles/redux-5065.local.json' -Raw | ConvertFrom-Json
-          if ($profile.Flash5065DiagnosticMode -ne 1) { throw 'Flash-only stage should be default' }
+          if ($profile.UseOriginalFlashLogin) { throw 'Native Flashless login must be default' }
+          if ($profile.Flash5065DiagnosticMode -ne 0) { throw 'Native profile must use normal networking' }
           if (-not (Test-Path tools/Diagnose-Crash5065.ps1)) { throw 'Crash reporter missing' }
       - name: Compile launcher (Release x86, .NET Framework 4.6.2)
         shell: pwsh
@@ -102,23 +104,25 @@ jobs:
           2. config.json apunta a 127.0.0.1:9958 (login) y :5816 (juego).
           3. Si Redux usa otra IP/puertos, configura con tools/Configure-Redux5065.ps1.
           4. Este 5065 usa CLHook.dll compilado de ConquerHook/ (no COFlashFixer.dll).
-          5. UseOriginalFlashLogin=true: conserva el login SWF original
+          5. UseOriginalFlashLogin=false (predeterminado): abre login Win32 nativo,
+             valida SHA256 del Conquer.exe 5065 y no carga Flash.ocx.
+          6. UseOriginalFlashLogin=true: alternativa que conserva el login SWF original
              y redirige Flash ActiveX hacia Flash.ocx LOCAL de la carpeta.
              Para ausencia de registro COM, prueba el class factory local.
-          6. No incluye ningun Flash.ocx. Probar un OCX antiguo solo en VM;
+          7. No incluye ningun Flash.ocx. Probar un OCX antiguo solo en VM;
              una DLL local sin firma puede ejecutar codigo no confiable.
-          7. UseOriginalFlashLogin=false: login nativo EXPERIMENTAL.
           8. Los cambios de modo se guardan en config.json. Comprueba
              conquerloader.log si surge algun error de login.
-          9. En modo Flash del cliente 5065, CLHook se carga por APC antes
-             del entry point de Conquer.exe (idea de Dragon, Spirited).
+          9. En ambos modos 5065, CLHook se carga por APC antes del entry point.
           10. Usa Windows Defender y prueba componentes antiguos en VM.
           Compilado en GitHub Actions. No incluye el cliente ni prueba la seguridad de las DLL embebidas.
           '@ | Set-Content -LiteralPath "$dist/LEEME-Redux5065.txt" -Encoding UTF8
+          Compress-Archive -Path "$dist/*" -DestinationPath 'dist/ConquerLoader-Redux-5065.zip' -Force
+          if (-not (Test-Path 'dist/ConquerLoader-Redux-5065.zip')) { throw 'ZIP was not produced' }
       - name: Upload compiled launcher (ZIP)
         uses: actions/upload-artifact@v4
         with:
           name: ConquerLoader-Redux-5065
-          path: dist/ConquerLoader-Redux-5065/
+          path: dist/ConquerLoader-Redux-5065.zip
           if-no-files-found: error
           retention-days: 14

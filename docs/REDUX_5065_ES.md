@@ -275,3 +275,32 @@ con instantánea y un archivo OCX de procedencia verificada; el ZIP no
 distribuye componentes Flash de terceros.
 
 Fuente: https://www.elitepvpers.com/forum/co2-guides-templates/4858018-release-flash-fix-old-clients.html
+
+
+## Cambio esencial de Dragon: instalar el hook ANTES del entry point
+
+Se verificó `Dragon.Launch/launch_process.cpp` y `Dragon.Module.Flash/flash_hook.cpp`
+del repositorio de Spirited. El detour de Flash es casi idéntico al de
+Ultimation, pero Dragon crea `Conquer.exe` suspendido, programa la carga
+con `QueueUserAPC(LoadLibraryW)` y reanuda su hilo principal. En el
+ConquerLoader anterior la DLL se inyectaba después de `Process.Start`,
+cuando ya podía haber fallado la inicialización de Flash.
+
+Nuestra implementación `EarlyInjectedClient.cs` usa el mismo orden **solo**
+para Conquer 5065 con `UseOriginalFlashLogin=true`:
+
+1. Iniciar el ejecutable con `CREATE_SUSPENDED` (x86).
+2. Copiar la ruta absoluta de `CLHook.dll` al proceso.
+3. Programar `LoadLibraryW` con `QueueUserAPC` en el hilo primario.
+4. Reanudar Conquer, verificar que `CLHook.dll` se cargó y no volver a
+   inyectarlo por segunda vez.
+5. Si no hay carga confirmada, interrumpir esa prueba; no arrancar un
+   proceso sin el hook.
+
+**No significa que el Flash 7.0.14.0 sin firma sea seguro o compatible.**
+No se incluye Flash.ocx en el ZIP. El control requiere evaluación en VM,
+preferentemente con un archivo legítimo de arquitectura x86 compatible.
+El inicio completo del cliente sigue sin estar verificado: el build solo
+confirma compilación y lógica de infraestructura de arranque.
+
+Referencia: https://gitlab.com/spirited/dragon/

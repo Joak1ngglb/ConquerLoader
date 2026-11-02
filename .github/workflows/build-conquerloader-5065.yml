@@ -43,6 +43,10 @@ jobs:
             nuget restore $config -PackagesDirectory 'ConquerLoader/packages' -NonInteractive -Verbosity normal
             if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed for $config" }
           }
+      - name: Verify Dragon-style early hook wiring (source regression test)
+        shell: pwsh
+        run: |
+          ./tests/Test-EarlyFlash5065.ps1
       - name: Compile launcher (Release x86, .NET Framework 4.6.2)
         shell: pwsh
         run: |
@@ -99,7 +103,9 @@ jobs:
           7. UseOriginalFlashLogin=false: login nativo EXPERIMENTAL.
           8. Los cambios de modo se guardan en config.json. Comprueba
              conquerloader.log si surge algun error de login.
-          9. Usa Windows Defender y prueba componentes antiguos en VM.
+          9. En modo Flash del cliente 5065, CLHook se carga por APC antes
+             del entry point de Conquer.exe (idea de Dragon, Spirited).
+          10. Usa Windows Defender y prueba componentes antiguos en VM.
           Compilado en GitHub Actions. No incluye el cliente ni prueba la seguridad de las DLL embebidas.
           '@ | Set-Content -LiteralPath "$dist/LEEME-Redux5065.txt" -Encoding UTF8
       - name: Upload compiled launcher (ZIP)

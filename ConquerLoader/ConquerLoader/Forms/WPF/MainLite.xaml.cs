@@ -641,12 +641,23 @@ namespace ConquerLoader.Forms.WPF
                 return;
             }
 
-            Process conquerProc = Process.Start(new ProcessStartInfo
-            {
-                FileName = pathToConquerExe,
-                WorkingDirectory = workingDir,
-                Arguments = "blacknull"
-            });
+            // Dragon's main innovation: install the Flash hook BEFORE the game
+            // entry point. Process.Start followed by Injector.StartInjection
+            // often runs too late for 5065's early ActiveX initialization.
+            bool earlyFlashInjection =
+                SelectedServer.ServerVersion == 5065 &&
+                LoaderConfig.UseOriginalFlashLogin && !CustomDLLs;
+            Process conquerProc = earlyFlashInjection
+                ? EarlyInjectedClient.Launch(
+                    pathToConquerExe, workingDir,
+                    Path.Combine(workingDir, HookDLL),
+                    message => Core.LogWritter.Write("[EarlyFlash5065] " + message))
+                : Process.Start(new ProcessStartInfo
+                {
+                    FileName = pathToConquerExe,
+                    WorkingDirectory = workingDir,
+                    Arguments = "blacknull"
+                });
 
             if (conquerProc == null)
             {
@@ -764,6 +775,15 @@ namespace ConquerLoader.Forms.WPF
             else
             {
                 if (CustomDLLs) return;
+                // Early APC already injected the hook; injecting a second time
+                // risks corrupting Detours and reinstating the Flash error.
+                if (earlyFlashInjection)
+                {
+                    Core.LogWritter.Write("[EarlyFlash5065] Skipping late duplicate CLHook injection.");
+                    worker.ReportProgress(99);
+                    worker.ReportProgress(100);
+                    return;
+                }
 
                 if (!Injector.StartInjection(WinForms.Application.StartupPath + @"\" + HookDLL, (uint)conquerProc.Id, worker).Injected)
                 {

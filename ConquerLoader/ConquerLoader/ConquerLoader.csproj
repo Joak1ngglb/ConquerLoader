@@ -264,6 +264,7 @@
       <DependentUpon>Wizard.cs</DependentUpon>
     </Compile>
     <Compile Include="Models\ServersDatGenerator.cs" />
+    <Compile Include="Models\EarlyInjectedClient.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Forms\Settings.cs">

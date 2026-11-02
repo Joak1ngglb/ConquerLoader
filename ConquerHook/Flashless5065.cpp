@@ -1,20 +1,28 @@
 #include "stdafx.h"
 #include "Flashless5065.h"
 #include <windows.h>
+#include <wincrypt.h>
 #include <cstring>
+#include <cstdio>
+#pragma comment(lib, "advapi32.lib")
+
+extern char szConfig[MAX_PATH];
 
 // Reverse-engineered for the supplied PE32 dated 2008-08-24 ONLY.
 // A mismatch fails closed, without patching arbitrary client versions.
 namespace {
-const DWORD kBase=0x00400000, kTimestamp=0x48b121fe, kSize=0x18f000;
-const DWORD kConstructor=0x43121e, kFlashCheck=0x47a0b1, kNativeLogin=0x431e38;
+const DWORD kTimestamp=0x48b121fe, kSize=0x18f000;
+const DWORD kConstructorRva=0x3121e, kFlashCheckRva=0x7a0b1, kNativeLoginRva=0x31e38;
 // Reverse-engineered from Conquer.exe 5065:
 // 0x468A89 stores the main game object's pointer at 0x56BF4C.
 // Its nested DlgLoginFlash object starts at game object + 0xA0.
 // The original constructor runs BEFORE the launcher injects CLHook.dll,
 // so hooking that constructor later cannot capture the login object.
-const DWORD kGameObjectGlobal=0x56bf4c, kLoginOffset=0xa0;
-const DWORD kLoginVtable=0x52d940;
+const DWORD kGameObjectGlobalRva=0x16bf4c, kLoginOffset=0xa0;
+const DWORD kLoginVtableRva=0x12d940;
+const BYTE kExpectedSha256[32]={
+    0x97,0xcc,0xc3,0x27,0x6d,0x46,0xd4,0x6b,0xb9,0x1a,0xd6,0x2e,0x75,0x8d,0x1f,0xb6,
+    0x22,0xc0,0x36,0xf6,0x22,0x4e,0xed,0x5e,0xa7,0xc1,0x21,0xa8,0x0e,0x55,0x0a,0x89};
 const UINT kSubmit=WM_APP+5065;
 HMODULE g_module=NULL;
 HHOOK g_hook=NULL;
@@ -25,18 +33,71 @@ HWND g_gameWindow=NULL;
 volatile LONG g_windowSizeChecked=0;
 char g_account[16]={0}, g_password[16]={0};
 volatile LONG g_pending=0;
+BYTE* g_image=NULL;
+char g_server[32]="Redux";
 
-bool WriteCode(DWORD address,const void* data,size_t size) {
+void Trace(const char* message) {
+    char path[MAX_PATH]={};
+    DWORD n=GetModuleFileNameA(NULL,path,MAX_PATH);
+    if(!n || n>=MAX_PATH)return;
+    char* slash=strrchr(path,'\\');
+    if(!slash)return;
+    strcpy_s(slash+1,MAX_PATH-(slash+1-path),"CLHook-5065.log");
+    FILE* file=NULL;
+    if(fopen_s(&file,path,"a")==0 && file) {
+        SYSTEMTIME now={}; GetLocalTime(&now);
+        fprintf(file,"%02u:%02u:%02u.%03u [native] %s\n",now.wHour,now.wMinute,
+            now.wSecond,now.wMilliseconds,message);
+        fclose(file);
+    }
+}
+bool ExactFileHash() {
+    wchar_t path[MAX_PATH]={};
+    if(!GetModuleFileNameW(NULL,path,MAX_PATH))return false;
+    HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    HCRYPTPROV provider=0; HCRYPTHASH hash=0; bool ok=false;
+    if(CryptAcquireContextW(&provider,NULL,NULL,PROV_RSA_AES,CRYPT_VERIFYCONTEXT) &&
+       CryptCreateHash(provider,CALG_SHA_256,0,0,&hash)) {
+        BYTE buffer[64*1024]; DWORD read=0; BOOL readOk=TRUE; ok=true;
+        while((readOk=ReadFile(file,buffer,sizeof(buffer),&read,NULL)) && read) {
+            if(!CryptHashData(hash,buffer,read,0)){ok=false;break;}
+        }
+        if(!readOk)ok=false;
+        BYTE digest[32]={}; DWORD size=sizeof(digest);
+        ok=ok && CryptGetHashParam(hash,HP_HASHVAL,digest,&size,0) && size==sizeof(digest) &&
+            memcmp(digest,kExpectedSha256,sizeof(digest))==0;
+        SecureZeroMemory(buffer,sizeof(buffer));
+    }
+    if(hash)CryptDestroyHash(hash);
+    if(provider)CryptReleaseContext(provider,0);
+    CloseHandle(file);
+    return ok;
+}
+bool RegionAllows(const void* address,size_t bytes,DWORD required) {
+    MEMORY_BASIC_INFORMATION region={};
+    if(!VirtualQuery(address,&region,sizeof(region)) || region.State!=MEM_COMMIT ||
+       (region.Protect&(PAGE_NOACCESS|PAGE_GUARD)))return false;
+    const BYTE* start=reinterpret_cast<const BYTE*>(address);
+    const BYTE* end=reinterpret_cast<const BYTE*>(region.BaseAddress)+region.RegionSize;
+    if(end<start || static_cast<size_t>(end-start)<bytes)return false;
+    return required==0 || (region.Protect&required)!=0;
+}
+
+bool WriteCode(BYTE* address,const void* data,size_t size) {
     DWORD previous=0, ignored=0;
-    if(!VirtualProtect(reinterpret_cast<void*>(address),size,PAGE_EXECUTE_READWRITE,&previous))return false;
-    memcpy(reinterpret_cast<void*>(address),data,size);
-    FlushInstructionCache(GetCurrentProcess(),reinterpret_cast<void*>(address),size);
-    VirtualProtect(reinterpret_cast<void*>(address),size,previous,&ignored);
+    if(!RegionAllows(address,size,0) ||
+       !VirtualProtect(address,size,PAGE_EXECUTE_READWRITE,&previous))return false;
+    memcpy(address,data,size);
+    FlushInstructionCache(GetCurrentProcess(),address,size);
+    VirtualProtect(address,size,previous,&ignored);
     return true;
 }
 bool ExactBuild() {
     HMODULE module=GetModuleHandleA(NULL);
-    if(reinterpret_cast<DWORD>(module)!=kBase)return false;
+    if(!module || !ExactFileHash())return false;
+    g_image=reinterpret_cast<BYTE*>(module);
     PIMAGE_DOS_HEADER mz=reinterpret_cast<PIMAGE_DOS_HEADER>(module);
     if(mz->e_magic!=IMAGE_DOS_SIGNATURE || mz->e_lfanew<0 || mz->e_lfanew>4096)return false;
     PIMAGE_NT_HEADERS32 nt=reinterpret_cast<PIMAGE_NT_HEADERS32>(reinterpret_cast<BYTE*>(module)+mz->e_lfanew);
@@ -44,12 +105,19 @@ bool ExactBuild() {
        nt->FileHeader.TimeDateStamp!=kTimestamp || nt->OptionalHeader.SizeOfImage!=kSize)return false;
     const BYTE ctor[]={0xb8,0x91,0x9e,0x51,0x00,0xe8,0xf8,0xf0,0x0b,0x00};
     const BYTE check[]={0xb8,0x2d,0xda,0x51,0x00,0xe8,0x65,0x62,0x07,0x00};
-    return memcmp(reinterpret_cast<void*>(kConstructor),ctor,sizeof(ctor))==0 &&
-           memcmp(reinterpret_cast<void*>(kFlashCheck),check,sizeof(check))==0;
+    BYTE* constructor=g_image+kConstructorRva;
+    BYTE* flashCheck=g_image+kFlashCheckRva;
+    BYTE* nativeLogin=g_image+kNativeLoginRva;
+    return RegionAllows(constructor,sizeof(ctor),0) && RegionAllows(flashCheck,sizeof(check),0) &&
+           RegionAllows(nativeLogin,1,0) &&
+           memcmp(constructor,ctor,sizeof(ctor))==0 && memcmp(flashCheck,check,sizeof(check))==0;
 }
 // Obtain the object that already exists; the constructor was called before DLL injection.
 bool Ready() {
-    DWORD base=*reinterpret_cast<volatile DWORD*>(kGameObjectGlobal);
+    if(!g_image)return false;
+    DWORD* global=reinterpret_cast<DWORD*>(g_image+kGameObjectGlobalRva);
+    if(!RegionAllows(global,sizeof(*global),0))return false;
+    DWORD base=*reinterpret_cast<volatile DWORD*>(global);
     if(base<0x10000 || base>0x7ff00000)return false;
     BYTE* object=reinterpret_cast<BYTE*>(base+kLoginOffset);
     MEMORY_BASIC_INFORMATION region={};
@@ -57,7 +125,7 @@ bool Ready() {
        (region.Protect&(PAGE_NOACCESS|PAGE_GUARD)))return false;
     BYTE* regionEnd=reinterpret_cast<BYTE*>(region.BaseAddress)+region.RegionSize;
     if(regionEnd<object || static_cast<size_t>(regionEnd-object)<0x3e0)return false;
-    if(*reinterpret_cast<volatile DWORD*>(object)!=kLoginVtable)return false;
+    if(*reinterpret_cast<volatile DWORD*>(object)!=reinterpret_cast<DWORD>(g_image+kLoginVtableRva))return false;
     g_nativeLoginObject=object;
     return true;
 }
@@ -128,7 +196,16 @@ LRESULT CALLBACK OnGameMessage(int code,WPARAM w,LPARAM l) {
                 memcpy(self+0x358,g_password,strlen(g_password));
                 SecureZeroMemory(g_password,sizeof(g_password));
                 typedef void (__thiscall *GameLogin)(void*);
-                (reinterpret_cast<GameLogin>(kNativeLogin))(self);
+                Trace("Credentials copied; invoking verified 5065 login routine.");
+                __try {
+                    (reinterpret_cast<GameLogin>(g_image+kNativeLoginRva))(self);
+                    Trace("5065 login routine returned normally.");
+                } __except(EXCEPTION_EXECUTE_HANDLER) {
+                    char error[96]={};
+                    sprintf_s(error,"ERROR: login routine raised exception 0x%08lX.",GetExceptionCode());
+                    Trace(error);
+                }
+                SecureZeroMemory(g_account,sizeof(g_account));
             }
             msg->message=WM_NULL;
         }
@@ -140,22 +217,25 @@ LRESULT CALLBACK UiProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
     switch(message) {
         case WM_CREATE: {
             HFONT font=reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-            HWND title=CreateWindowA("STATIC","Redux 5065 - Login sin Flash",
+            HWND title=CreateWindowA("STATIC","Conquer 5065 - Login nativo sin Flash",
                 WS_VISIBLE|WS_CHILD,18,15,330,24,hwnd,NULL,g_module,NULL);
+            char selected[96]={}; sprintf_s(selected,"Servidor: %s",g_server);
+            HWND serverLabel=CreateWindowA("STATIC",selected,WS_VISIBLE|WS_CHILD,
+                18,40,330,20,hwnd,NULL,g_module,NULL);
             HWND accountLabel=CreateWindowA("STATIC","Cuenta:",WS_VISIBLE|WS_CHILD,
-                18,57,88,23,hwnd,NULL,g_module,NULL);
+                18,72,88,23,hwnd,NULL,g_module,NULL);
             g_user=CreateWindowExA(WS_EX_CLIENTEDGE,"EDIT","",WS_VISIBLE|WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL,
-                110,50,235,28,hwnd,reinterpret_cast<HMENU>(101),g_module,NULL);
+                110,65,235,28,hwnd,reinterpret_cast<HMENU>(101),g_module,NULL);
             HWND passLabel=CreateWindowA("STATIC","Contrasena:",WS_VISIBLE|WS_CHILD,
-                18,96,88,23,hwnd,NULL,g_module,NULL);
+                18,111,88,23,hwnd,NULL,g_module,NULL);
             g_pass=CreateWindowExA(WS_EX_CLIENTEDGE,"EDIT","",WS_VISIBLE|WS_CHILD|WS_TABSTOP|ES_PASSWORD,
-                110,89,235,28,hwnd,reinterpret_cast<HMENU>(102),g_module,NULL);
+                110,104,235,28,hwnd,reinterpret_cast<HMENU>(102),g_module,NULL);
             HWND button=CreateWindowA("BUTTON","Entrar",WS_VISIBLE|WS_CHILD|WS_TABSTOP|BS_DEFPUSHBUTTON,
-                110,135,235,32,hwnd,reinterpret_cast<HMENU>(103),g_module,NULL);
+                110,148,235,32,hwnd,reinterpret_cast<HMENU>(103),g_module,NULL);
             g_status=CreateWindowA("STATIC","Esperando al cliente...",WS_VISIBLE|WS_CHILD,
-                18,190,330,30,hwnd,NULL,g_module,NULL);
-            HWND controls[]={title,accountLabel,g_user,passLabel,g_pass,button,g_status};
-            for(int i=0;i<7;i++)if(controls[i])SendMessageA(controls[i],WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
+                18,203,345,34,hwnd,NULL,g_module,NULL);
+            HWND controls[]={title,serverLabel,accountLabel,g_user,passLabel,g_pass,button,g_status};
+            for(int i=0;i<8;i++)if(controls[i])SendMessageA(controls[i],WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
             SendMessageA(g_user,EM_LIMITTEXT,15,0);
             SendMessageA(g_pass,EM_LIMITTEXT,14,0);
             SetTimer(hwnd,1,500,NULL);return 0;
@@ -221,7 +301,7 @@ DWORD WINAPI NativeUI(LPVOID) {
     if(!RegisterClassA(&c) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS)return 1;
     HWND window=CreateWindowExA(WS_EX_APPWINDOW,"ReduxNative5065","Redux 5065 - Sin Adobe Flash",
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_VISIBLE,
-        CW_USEDEFAULT,CW_USEDEFAULT,385,265,NULL,NULL,g_module,NULL);
+        CW_USEDEFAULT,CW_USEDEFAULT,395,285,NULL,NULL,g_module,NULL);
     if(!window)return 2;
     g_loginWindow=window;
     MSG msg={};
@@ -232,13 +312,19 @@ DWORD WINAPI NativeUI(LPVOID) {
 }
 }
 bool EnableFlashless5065(HMODULE module) {
-    if(!ExactBuild())return false;
+    Trace("Starting SHA-256 and PE validation for native 5065 login.");
+    if(!ExactBuild()) { Trace("ERROR: executable hash/PE/signature validation failed; no patch applied."); return false; }
     g_module=module;
+    GetPrivateProfileStringA("CLHook","SERVERNAME","Redux",g_server,sizeof(g_server),szConfig);
     // The version test belongs to the Flash ActiveX path, not network auth.
     const BYTE success[]={0xb0,0x01,0xc3}; // mov al,1; ret
-    if(!WriteCode(kFlashCheck,success,sizeof(success)))return false;
+    if(!WriteCode(g_image+kFlashCheckRva,success,sizeof(success))) {
+        Trace("ERROR: verified Flash version check could not be patched."); return false;
+    }
+    Trace("Verified Flash version check bypassed; no Flash/COM hooks will be installed.");
     HANDLE ui=CreateThread(NULL,0,NativeUI,NULL,0,NULL);
-    if(!ui)return false;
+    if(!ui) { Trace("ERROR: native Win32 login thread could not be created."); return false; }
     CloseHandle(ui);
+    Trace("Native Win32 login thread created.");
     return true;
 }

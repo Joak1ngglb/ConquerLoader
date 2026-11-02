@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
@@ -16,6 +17,8 @@ namespace ConquerLoader.Models
     /// </summary>
     internal static class EarlyInjectedClient
     {
+        private const string Supported5065Sha256 =
+            "97CCC3276D46D46BB91AD62E758D1FB622C036F6224EED5EA7C121A80E550A89";
         private const uint CreateSuspended = 0x00000004;
         private const uint MemCommit = 0x00001000;
         private const uint MemReserve = 0x00002000;
@@ -103,6 +106,16 @@ namespace ConquerLoader.Models
             executablePath = Path.GetFullPath(executablePath);
             hookPath = Path.GetFullPath(hookPath);
             directory = Path.GetFullPath(directory);
+            string clientHash;
+            using (var stream = File.OpenRead(executablePath))
+            using (var sha = SHA256.Create())
+                clientHash = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+            if (!string.Equals(clientHash, Supported5065Sha256,
+                StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "Conquer.exe no es el build 5065 soportado. SHA256=" + clientHash +
+                    "; esperado=" + Supported5065Sha256 + ". No se inicio ni modifico el cliente.");
+            log("Conquer.exe verificado por SHA-256: " + clientHash + ".");
             var startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) };
             ProcessInformation info;
             var command = new StringBuilder("\"" + executablePath + "\" blacknull");

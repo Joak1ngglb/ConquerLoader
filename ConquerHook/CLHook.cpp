@@ -31,10 +31,15 @@ using namespace std;
 
 #define lib_func(lib, func) (GetProcAddress(GetModuleHandleA(lib), func))
 
-char tqFormat[] = { 0x25, 0x73, 0xA3, 0xAC, 0xA1, 0xA3, 0x66, 0x64, 0x6A, 0x66, 0x2C, 0x6A, 0x6B, 0x67, 0x66, 0x6B, 0x6C, 0x00 };
+char tqFormat[] = { 0x25, 0x73, (char)0xA3, (char)0xAC, (char)0xA1, (char)0xA3,
+    0x66, 0x64, 0x6A, 0x66, 0x2C, 0x6A, 0x6B, 0x67, 0x66, 0x6B, 0x6C, 0x00 };
 char szPassword[32];
 char szConfig[MAX_PATH];
 HOOK_STUB snprintf_stub, send_stub, connect_stub, shellexec_stub;
+typedef int (__stdcall *ConnectProc)(SOCKET,sockaddr_in*,int);
+typedef int (__stdcall *SendProc)(SOCKET,PBYTE,int,int);
+ConnectProc native5065_connect = NULL;
+SendProc native5065_send = NULL;
 PBYTE handler_stub;
 CLegacyCipher* legacy;
 int ClientVersion = 0, EnableHostName = 0, UpdatedIPS = 0, DisableAutoFixFlash = 0;
@@ -56,6 +61,7 @@ BYTE pattern2[] = { 0x85, 0xC9, 0x00, 0x00, 0xFF, 0x75, 0x00, 0x57, 0xE8, 0x00, 
 BYTE pattern2_6617[] = { 0x85, 0xC9, 0x74, 0x0C, 0xFF, 0x75, 0x0C, 0x57, 0xE8, 0x53, 0xF2, 0xFF, 0xFF, 0x89, 0x45 }; // Pattern2. Version = 6617
 
 extern LPVOID FindMemoryPattern(PBYTE pattern, bool* wildCards, int len);
+static void Flash5065Trace(const char* message);
 
 
 static inline bool is_base64(unsigned char c) {
@@ -64,24 +70,29 @@ static inline bool is_base64(unsigned char c) {
 
 int csv3_snprintf(char* str, int len, const char* format, ...)
 {
+	if (!str || len <= 0 || !format) return -1;
 	va_list args;
 	va_start(args, format);
+	int result = -1;
 	if (strcmp(format, tqFormat) == 0)
 	{
 		char* password = va_arg(args, PCHAR);
-		strcpy(szPassword, password);
-		str[0] = NULL;
-		strcat(str, password);
-		strcat(str, &tqFormat[2]);
+		if (!password) password = "";
+		strcpy_s(szPassword, sizeof(szPassword), password);
+		if (strcpy_s(str, len, password) != 0 || strcat_s(str, len, &tqFormat[2]) != 0)
+			result = -1;
+		else
+			result = static_cast<int>(strlen(str));
 
 		//MessageBoxA(NULL, szPassword, "Password", MB_OK);
 
-		return strlen(str);
 	}
 	else
 	{
-		return vsnprintf(str, len, format, args);
+		result = vsnprintf(str, len, format, args);
 	}
+	va_end(args);
+	return result;
 }
 int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 {
@@ -143,15 +154,25 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 	//END Servername Changer
 
 	typedef int (__stdcall *LPFCONNECT)(SOCKET,sockaddr_in*,int);
-	return ((LPFCONNECT)connect_stub.Address)(s, name, len);
+	LPFCONNECT original = native5065_connect ? native5065_connect :
+		reinterpret_cast<LPFCONNECT>(connect_stub.Address);
+	return original ? original(s, name, len) : SOCKET_ERROR;
 }
 int __stdcall csv3_send(SOCKET s, PBYTE buf, int len, int flags)
 {
 	if (legacy)
 	{
 		legacy->Decrypt(buf, len);
-
-		strcat((char*)&buf[4+4+64], szPassword);
+		const size_t fieldOffset = 4 + 4 + 64;
+		const size_t passwordLength = strnlen_s(szPassword, sizeof(szPassword));
+		if (buf && len > static_cast<int>(fieldOffset)) {
+			size_t available = static_cast<size_t>(len) - fieldOffset;
+			size_t used = strnlen_s(reinterpret_cast<char*>(buf + fieldOffset), available);
+			if (used < available && passwordLength < available - used)
+				memcpy(buf + fieldOffset + used, szPassword, passwordLength + 1);
+			else
+				Flash5065Trace("ERROR: password field did not fit in legacy login packet.");
+		}
 
 		legacy->Encrypt(buf, len);
 		delete legacy;
@@ -160,7 +181,9 @@ int __stdcall csv3_send(SOCKET s, PBYTE buf, int len, int flags)
 
 	// invoke old method
 	typedef int (__stdcall *LPFSEND)(SOCKET,PBYTE,int,int);
-	return ((LPFSEND)send_stub.Address)(s,buf,len,flags);
+	LPFSEND original = native5065_send ? native5065_send :
+		reinterpret_cast<LPFSEND>(send_stub.Address);
+	return original ? original(s,buf,len,flags) : SOCKET_ERROR;
 }
 int __stdcall csv3_shellexec(HWND hwnd, char* lpOperation, char* lpFile, char* lpParams, char* lpDir, int nCmd)
 {
@@ -245,6 +268,46 @@ static DWORD WINAPI Deferred5065ConnectHook(LPVOID)
     return 1;
 }
 
+// Native 5065 still needs the legacy login packet adaptation used by Redux:
+// connect redirects the configured endpoints, snprintf captures the password,
+// and send places it in the legacy encrypted packet. Install all three only
+// after the CRT and Winsock imports exist, and use Detours trampolines instead
+// of the unsafe five-byte CreateHook32 implementation.
+static DWORD WINAPI Deferred5065NativeProtocolHooks(LPVOID)
+{
+    Flash5065Trace("Native protocol hook worker started.");
+    for (int attempt = 0; attempt < 300; ++attempt) {
+        HMODULE winsock = GetModuleHandleA("ws2_32.dll");
+        HMODULE crt = GetModuleHandleA("msvcr90.dll");
+        PVOID connectAddress = winsock ? GetProcAddress(winsock, "connect") : NULL;
+        PVOID sendAddress = winsock ? GetProcAddress(winsock, "send") : NULL;
+        PVOID snprintfAddress = crt ? GetProcAddress(crt, "_snprintf") : NULL;
+        if (connectAddress && sendAddress && snprintfAddress) {
+            native5065_connect = reinterpret_cast<ConnectProc>(connectAddress);
+            native5065_send = reinterpret_cast<SendProc>(sendAddress);
+            PVOID originalSnprintf = snprintfAddress;
+            if (DetourTransactionBegin() != NO_ERROR) break;
+            DetourUpdateThread(GetCurrentThread());
+            LONG a = DetourAttach(reinterpret_cast<PVOID*>(&native5065_connect), csv3_connect);
+            LONG b = DetourAttach(reinterpret_cast<PVOID*>(&native5065_send), csv3_send);
+            LONG c = DetourAttach(&originalSnprintf, csv3_snprintf);
+            LONG committed = (a == NO_ERROR && b == NO_ERROR && c == NO_ERROR)
+                ? DetourTransactionCommit() : DetourTransactionAbort();
+            if (committed == NO_ERROR) {
+                Flash5065Trace("Native connect/send/password hooks installed successfully.");
+                return 0;
+            }
+            native5065_connect = NULL;
+            native5065_send = NULL;
+            Flash5065Trace("ERROR: Detours rejected native protocol hooks.");
+            return 1;
+        }
+        Sleep(50);
+    }
+    Flash5065Trace("ERROR: ws2_32/msvcr90 imports unavailable after 15 seconds.");
+    return 1;
+}
+
 void csv3_init(HMODULE hModule)
 {
 	float f = 0; // load support for floating operations -- thx ntl3fty!
@@ -260,7 +323,7 @@ void csv3_init(HMODULE hModule)
 			break;
 		}
 	}
-	strcat(szConfig, "CLHook.ini");
+	strcat_s(szConfig, MAX_PATH, "CLHook.ini");
 
 	// Find the correct version of client based in user config
 	ClientVersion = GetPrivateProfileIntA(HeaderConfig, "SERVER_VERSION", 0, szConfig);
@@ -282,7 +345,12 @@ void csv3_init(HMODULE hModule)
         if (!EnableFlashless5065(hModule)) {
             MessageBoxA(NULL, "El cliente no coincide con Conquer.exe 5065 compatible. No se modifico el juego.",
                 "Redux - login sin Flash", MB_OK | MB_ICONERROR);
+			return;
         }
+		HANDLE worker = CreateThread(NULL, 0, Deferred5065NativeProtocolHooks, NULL, 0, NULL);
+		if (worker) CloseHandle(worker);
+		else Flash5065Trace("ERROR: native protocol worker could not be created.");
+		return;
     }
 
     // Stage isolation: distinguish failures originating in Flash/COM detours
@@ -352,7 +420,7 @@ void csv3_init(HMODULE hModule)
 
 		if (match == NULL)
 		{
-			sprintf(szDebug, "Failed to find correct pattern1", (DWORD)match);
+			strcpy_s(szDebug, "Failed to find correct pattern1");
 			MessageBoxA(NULL, szDebug, "ERROR", MB_OK);
 			return;
 		}
@@ -375,7 +443,7 @@ void csv3_init(HMODULE hModule)
 
 			if (match == NULL)
 			{
-				sprintf(szDebug, "Failed to find correct pattern2", (DWORD)match);
+				strcpy_s(szDebug, "Failed to find correct pattern2");
 				MessageBoxA(NULL, szDebug, "ERROR", MB_OK);
 				return;
 			}

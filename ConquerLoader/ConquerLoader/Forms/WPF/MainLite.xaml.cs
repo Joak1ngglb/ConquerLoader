@@ -484,7 +484,7 @@ namespace ConquerLoader.Forms.WPF
                         + Environment.NewLine + "FLASH5065_DIAGNOSTIC_MODE=" +
                             Math.Max(0, Math.Min(3, LoaderConfig.Flash5065DiagnosticMode)));
                     Core.LogWritter.Write("5065 login mode: " +
-                        (LoaderConfig.UseOriginalFlashLogin ? "original local Flash ActiveX (no global COM registration)" : "experimental native"));
+                        (LoaderConfig.UseOriginalFlashLogin ? "original local Flash ActiveX (no global COM registration)" : "native Win32 without Flash"));
 
                     if (SelectedServer.ServerVersion == 5065 && LoaderConfig.UseOriginalFlashLogin)
                         Core.LogWritter.Write("[EarlyFlash5065] Diagnostic mode=" +
@@ -652,14 +652,16 @@ namespace ConquerLoader.Forms.WPF
             // Dragon's main innovation: install the Flash hook BEFORE the game
             // entry point. Process.Start followed by Injector.StartInjection
             // often runs too late for 5065's early ActiveX initialization.
-            bool earlyFlashInjection =
-                SelectedServer.ServerVersion == 5065 &&
-                LoaderConfig.UseOriginalFlashLogin && !CustomDLLs;
-            Process conquerProc = earlyFlashInjection
+            // Both 5065 paths must load before the entry point. Native mode has
+            // to bypass the Flash version path before the client reaches it;
+            // Flash mode has to install its optional local COM redirect early.
+            bool early5065Injection =
+                SelectedServer.ServerVersion == 5065 && !CustomDLLs;
+            Process conquerProc = early5065Injection
                 ? EarlyInjectedClient.Launch(
                     pathToConquerExe, workingDir,
                     Path.Combine(workingDir, HookDLL),
-                    message => Core.LogWritter.Write("[EarlyFlash5065] " + message))
+                    message => Core.LogWritter.Write("[Early5065] " + message))
                 : Process.Start(new ProcessStartInfo
                 {
                     FileName = pathToConquerExe,
@@ -792,9 +794,9 @@ namespace ConquerLoader.Forms.WPF
                 if (CustomDLLs) return;
                 // Early APC already injected the hook; injecting a second time
                 // risks corrupting Detours and reinstating the Flash error.
-                if (earlyFlashInjection)
+                if (early5065Injection)
                 {
-                    Core.LogWritter.Write("[EarlyFlash5065] Skipping late duplicate CLHook injection.");
+                    Core.LogWritter.Write("[Early5065] Skipping late duplicate CLHook injection.");
                     worker.ReportProgress(99);
                     worker.ReportProgress(100);
                     return;
@@ -828,12 +830,13 @@ namespace ConquerLoader.Forms.WPF
             {
                 // Keep the launcher open, retaining its log, instead of silently
                 // closing the app and hiding the cause of the client crash.
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    ShowWarning("Conquer.exe se cerro. Codigo: " +
-                        (exitCode.HasValue ? "0x" + exitCode.Value.ToString("X8") : "desconocido") +
-                        ". En la carpeta del cliente revisa conquerloader.log y CLHook-5065.log.");
-                }));
+                if (!exitCode.HasValue || exitCode.Value != 0)
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        ShowWarning("Conquer.exe se cerro inesperadamente. Codigo: " +
+                            (exitCode.HasValue ? "0x" + exitCode.Value.ToString("X8") : "desconocido") +
+                            ". En la carpeta del cliente revisa conquerloader.log y CLHook-5065.log.");
+                    }));
                 return;
             }
 

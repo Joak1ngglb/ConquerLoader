@@ -49,6 +49,7 @@ jobs:
           ./tests/Test-EarlyFlash5065.ps1
           ./tests/Test-NativeLogin5065.ps1
           ./tests/Test-FlashCom5065.ps1
+          ./tests/Test-FlashDiagnostics5065.ps1
       - name: Verify staged Flash diagnostic behavior
         shell: pwsh
         run: |
@@ -114,7 +115,9 @@ jobs:
           8. Los cambios de modo se guardan en config.json. Comprueba
              conquerloader.log si surge algun error de login.
           9. En ambos modos 5065, CLHook se carga por APC antes del entry point.
-          10. Usa Windows Defender y prueba componentes antiguos en VM.
+          10. Si falla, ejecuta Diagnose-Crash5065.ps1: resume etapa Flash,
+              HRESULT, excepcion y SHA256 de los tres binarios.
+          11. Usa Windows Defender y prueba componentes antiguos en VM.
           Compilado en GitHub Actions. No incluye el cliente ni prueba la seguridad de las DLL embebidas.
           '@ | Set-Content -LiteralPath "$dist/LEEME-Redux5065.txt" -Encoding UTF8
           Compress-Archive -Path "$dist/*" -DestinationPath 'dist/ConquerLoader-Redux-5065.zip' -Force

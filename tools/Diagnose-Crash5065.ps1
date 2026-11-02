@@ -9,14 +9,44 @@ $ErrorActionPreference = 'Stop'
 $folder=(Resolve-Path -LiteralPath $ClientDirectory).Path
 Write-Host "=== Conquer.exe crash diagnostics ==="
 Write-Host "Folder: $folder"
+$hookLines=@()
 foreach($filename in @('CLHook-5065.log','conquerloader.log')){
     $file=Join-Path $folder $filename
     if(Test-Path -LiteralPath $file){
         Write-Host "=== $filename (last 45 lines) ==="
-        Get-Content -LiteralPath $file -Tail 45 | ForEach-Object {
+        $lines=@(Get-Content -LiteralPath $file -Tail 120)
+        if($filename -eq 'CLHook-5065.log'){$hookLines=$lines}
+        $lines | Select-Object -Last 45 | ForEach-Object {
             $_ -replace '(?i)(password|token|licensekey)\s*[:=]\s*\S+', '$1=[REDACTED]'
         }
     }else{Write-Host "$filename : not found"}
+}
+Write-Host '=== Flash activation summary ==='
+if($hookLines.Count -eq 0){
+    Write-Host 'No CLHook stage data available.'
+}else{
+    $lastStage=$hookLines | Where-Object {$_ -match '\[flash:([^\]]+)\]'} | Select-Object -Last 1
+    $lastHr=$hookLines | Where-Object {$_ -match 'HRESULT=0x[0-9A-Fa-f]{8}'} | Select-Object -Last 1
+    $lastException=$hookLines | Where-Object {$_ -match 'EXCEPTION code='} | Select-Object -Last 1
+    Write-Host ('Last Flash stage: ' + $(if($lastStage){$lastStage}else{'not recorded'}))
+    Write-Host ('Last HRESULT: ' + $(if($lastHr){$lastHr}else{'not recorded'}))
+    Write-Host ('Last exception: ' + $(if($lastException){$lastException}else{'not recorded'}))
+    foreach($required in @(
+        'LoadLibraryExW and COM activation hooks committed atomically.',
+        'Flash.ocx loaded at',
+        'Preflight complete: local ShockwaveFlash class factory ready.'
+    )){
+        Write-Host ("Checkpoint '$required': " + [bool]($hookLines -match [regex]::Escape($required)))
+    }
+}
+Write-Host '=== Binary identity ==='
+foreach($name in @('Conquer.exe','Flash.ocx','CLHook.dll')){
+    $path=Join-Path $folder $name
+    if(Test-Path -LiteralPath $path -PathType Leaf){
+        $hash=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        $version=[Diagnostics.FileVersionInfo]::GetVersionInfo($path).FileVersion
+        Write-Host "$name SHA256=$hash Version=$version"
+    }else{Write-Host "$name MISSING"}
 }
 Write-Host "=== Application Error (event id 1000), last 24h ==="
 try {

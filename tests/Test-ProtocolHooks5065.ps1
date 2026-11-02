@@ -9,7 +9,7 @@ Assert (-not $hook.Contains('ResolveMainImport("_snprintf")') -and -not $hook.Co
 Assert ($hook.Contains('if(ClientVersion==5065) {') -and $hook.Contains('5065 fallback: installing Winsock-only protocol hooks')) 'Every 5065 configuration must bypass the legacy CRT hook path.'
 Assert (-not $hook.Contains('GetModuleHandleA("msvcr90.dll")')) 'Protocol hooks must not assume msvcr90.dll.'
 Assert ($hook.Contains('Protocol resolve function=%s module=%s address=0x%p')) 'Per-function/module resolution logging missing.'
-Assert ($hook.Contains('Detour statuses transaction=') -and $hook.Contains('connect=%ld send=%ld; CRT detour=disabled')) 'Per-hook Detours logging missing.'
+Assert ($hook.Contains('Detour statuses transaction=') -and $hook.Contains('connect=%ld send=%ld recv=%ld; CRT detour=disabled')) 'Per-hook Detours logging missing.'
 Assert ($hook.Contains('if (allAttached && committed == NO_ERROR)')) 'An aborted Detours transaction must never publish protocol readiness.'
 Assert ($hook.Contains('connect route=%s redirected=%s original=%s:%d target=%s:%d')) 'Connection redirection logging missing.'
 Assert ($hook.Contains('getpeername') -and $hook.Contains('verified=%s')) 'Actual peer verification missing.'
@@ -17,6 +17,8 @@ Assert ($hook.Contains('payload is read-only') -and $hook.Contains('forwarded by
 Assert ($hook.Contains('login-copy header declaredLength=%u type=%u classification=%s') -and
         $hook.Contains('MsgMacAddress(1100)') -and $hook.Contains('fields redacted')) 'Login copy observer must classify only redacted headers.'
 Assert ($hook.Contains('HeapAlloc(GetProcessHeap()') -and $hook.Contains('g_authObserver5065->Decrypt(observed,len)')) 'Header inspection must decrypt a private copy.'
+Assert ($hook.Contains('csv3_recv') -and $hook.Contains('login-recv header declaredLength=%u type=1055') -and
+        $hook.Contains('token and credentials redacted')) 'Read-only 1055 response/redirect diagnostics missing.'
 $send5065=$hook.Substring($hook.IndexOf('if(ClientVersion==5065)'))
 $send5065=$send5065.Substring(0,$send5065.IndexOf('else if (legacy'))
 Assert (-not $send5065.Contains('Decrypt(buf') -and -not $send5065.Contains('Encrypt(buf') -and
@@ -25,6 +27,8 @@ Assert ($hook.Contains('__declspec(thread) LONG g_sendHookDepth') -and
         $hook.Contains('ESP-before=') -and $hook.Contains('calling-convention-balanced=')) 'Recursion/stack/calling-convention diagnostics missing.'
 Assert ($hook.Contains('LogExceptionStack5065') -and $hook.Contains('ebp-return') -and $hook.Contains('esp-code')) 'Crash call trace missing.'
 Assert ($hook.Contains('NearestExport5065') -and $hook.Contains('crash-code return=')) 'Crash export/call-site diagnostics missing.'
+Assert ($hook.Contains('crash-registers EAX=') -and $hook.Contains('crash-access operation=') -and
+        $hook.Contains('possible-cdecl-args=')) 'Crash register/access/memcpy argument diagnostics missing.'
 Assert ($hook.Contains('ConquerLoader-Protocol5065-%s-%lu') -and
         $early.Contains('ConquerLoader-Protocol5065-Ready-') -and
         $early.Contains('ConquerLoader-Protocol5065-Failed-')) 'Launcher must wait for protocol hook readiness/failure.'

@@ -38,8 +38,10 @@ char szConfig[MAX_PATH];
 HOOK_STUB snprintf_stub, send_stub, connect_stub, shellexec_stub;
 typedef int (__stdcall *ConnectProc)(SOCKET,sockaddr_in*,int);
 typedef int (__stdcall *SendProc)(SOCKET,PBYTE,int,int);
+typedef int (__stdcall *RecvProc)(SOCKET,char*,int,int);
 ConnectProc native5065_connect = NULL;
 SendProc native5065_send = NULL;
+RecvProc native5065_recv = NULL;
 SOCKET g_loginSocket = INVALID_SOCKET;
 SOCKET g_gameSocket = INVALID_SOCKET;
 sockaddr_in g_expectedLogin = {};
@@ -48,7 +50,10 @@ __declspec(thread) LONG g_sendHookDepth = 0;
 PBYTE handler_stub;
 CLegacyCipher* legacy;
 CLegacyCipher* g_authObserver5065=NULL;
+CLegacyCipher* g_authInboundObserver5065=NULL;
 SRWLOCK g_authObserverLock=SRWLOCK_INIT;
+BYTE g_authInboundPending5065[1024]={};
+unsigned g_authInboundPendingLength5065=0;
 int ClientVersion = 0, EnableHostName = 0, UpdatedIPS = 0, DisableAutoFixFlash = 0;
 BYTE patternDynamic = 0x4F;
 char HostName[32] = "";
@@ -184,8 +189,12 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 		else {
 			AcquireSRWLockExclusive(&g_authObserverLock);
 			if(g_authObserver5065)delete g_authObserver5065;
+			if(g_authInboundObserver5065)delete g_authInboundObserver5065;
 			g_authObserver5065=new CLegacyCipher();
+			g_authInboundObserver5065=new CLegacyCipher();
 			if(g_authObserver5065)g_authObserver5065->GenerateIV(0x13FA0F9D,0x6D5C7962);
+			if(g_authInboundObserver5065)g_authInboundObserver5065->GenerateIV(0x13FA0F9D,0x6D5C7962);
+			g_authInboundPendingLength5065=0;
 			ReleaseSRWLockExclusive(&g_authObserverLock);
 			Flash5065Trace("5065 login observer initialized; it decrypts only a private copy to classify headers and never logs payload fields.");
 		}
@@ -233,6 +242,53 @@ int __stdcall csv3_connect(SOCKET s, sockaddr_in* name, int len)
 	} else {
 		sprintf_s(redirectLog,"connect result=%d WSAError=%d (destination not yet peer-verified).",result,error);
 		Flash5065Trace(redirectLog);
+	}
+	if(result==SOCKET_ERROR)WSASetLastError(error);
+	return result;
+}
+int __stdcall csv3_recv(SOCKET s,char* buf,int len,int flags)
+{
+	RecvProc original=native5065_recv;
+	if(!original){Flash5065Trace("ERROR: recv trampoline is NULL.");WSASetLastError(WSAEINVAL);return SOCKET_ERROR;}
+	int result=original(s,buf,len,flags);
+	int error=result==SOCKET_ERROR?WSAGetLastError():0;
+	if(ClientVersion==5065 && s==g_loginSocket && result>0 && buf) {
+		BYTE* observed=reinterpret_cast<BYTE*>(HeapAlloc(GetProcessHeap(),0,static_cast<SIZE_T>(result)));
+		if(observed) {
+			for(int i=0;i<result;i++)observed[i]=static_cast<BYTE>(buf[i]);
+			AcquireSRWLockExclusive(&g_authObserverLock);
+			if(g_authInboundObserver5065) {
+				// Server-to-client auth bytes use the inverse direction of the
+				// legacy transform. Encrypt() here decodes only this private copy.
+				g_authInboundObserver5065->Encrypt(observed,result);
+				unsigned available=sizeof(g_authInboundPending5065)-g_authInboundPendingLength5065;
+				unsigned append=static_cast<unsigned>(result)<available?static_cast<unsigned>(result):available;
+				for(unsigned i=0;i<append;i++)g_authInboundPending5065[g_authInboundPendingLength5065+i]=observed[i];
+				g_authInboundPendingLength5065+=append;
+				while(g_authInboundPendingLength5065>=4) {
+					unsigned declared=g_authInboundPending5065[0]|(g_authInboundPending5065[1]<<8);
+					unsigned type=g_authInboundPending5065[2]|(g_authInboundPending5065[3]<<8);
+					if(declared<4 || declared>sizeof(g_authInboundPending5065)) {
+						char line[192]={};sprintf_s(line,"login-recv invalid decrypted header declaredLength=%u type=%u; fields redacted; observer reset.",declared,type);
+						Flash5065Trace(line);g_authInboundPendingLength5065=0;break;
+					}
+					if(g_authInboundPendingLength5065<declared)break;
+					char line[320]={};
+					if(type==1055 && declared>=32) {
+						DWORD outcome=*reinterpret_cast<DWORD*>(g_authInboundPending5065+8);
+						char target[17]={};for(unsigned i=0;i<16;i++){BYTE c=g_authInboundPending5065[12+i];target[i]=(c>=32&&c<127)?static_cast<char>(c):0;if(!target[i])break;}
+						DWORD port=*reinterpret_cast<DWORD*>(g_authInboundPending5065+28);
+						sprintf_s(line,"login-recv header declaredLength=%u type=1055 outcome=%lu gameTarget=%s:%lu; token and credentials redacted.",declared,outcome,target[0]?target:"invalid",port);
+					} else sprintf_s(line,"login-recv header declaredLength=%u type=%u; fields redacted.",declared,type);
+					Flash5065Trace(line);
+					unsigned remaining=g_authInboundPendingLength5065-declared;
+					for(unsigned i=0;i<remaining;i++)g_authInboundPending5065[i]=g_authInboundPending5065[declared+i];
+					g_authInboundPendingLength5065=remaining;
+				}
+			} else Flash5065Trace("ERROR: 5065 inbound login observer cipher is unavailable.");
+			ReleaseSRWLockExclusive(&g_authObserverLock);
+			HeapFree(GetProcessHeap(),0,observed);
+		} else Flash5065Trace("ERROR: 5065 recv observer allocation failed; received buffer remains untouched.");
 	}
 	if(result==SOCKET_ERROR)WSASetLastError(error);
 	return result;
@@ -538,6 +594,26 @@ static LONG CALLBACK Flash5065ExceptionTrace(PEXCEPTION_POINTERS pointers) {
             code,static_cast<DWORD>(reinterpret_cast<DWORD_PTR>(address)),pointers->ContextRecord->Eip,pointers->ContextRecord->Esp,
             pointers->ContextRecord->Ebp,module,CFlashFix::StageName());
         Flash5065Trace(state);
+        wsprintfA(state,"crash-registers EAX=0x%08lX EBX=0x%08lX ECX=0x%08lX EDX=0x%08lX ESI=0x%08lX EDI=0x%08lX.",
+            pointers->ContextRecord->Eax,pointers->ContextRecord->Ebx,pointers->ContextRecord->Ecx,
+            pointers->ContextRecord->Edx,pointers->ContextRecord->Esi,pointers->ContextRecord->Edi);
+        Flash5065Trace(state);
+        if(code==EXCEPTION_ACCESS_VIOLATION && pointers->ExceptionRecord->NumberParameters>=2) {
+            const char* operation=pointers->ExceptionRecord->ExceptionInformation[0]==0?"read":
+                (pointers->ExceptionRecord->ExceptionInformation[0]==1?"write":"execute");
+            wsprintfA(state,"crash-access operation=%s target=0x%08lX.",operation,
+                static_cast<DWORD>(pointers->ExceptionRecord->ExceptionInformation[1]));
+            Flash5065Trace(state);
+        }
+        DWORD cdeclReturn=0,cdeclArg1=0,cdeclArg2=0,cdeclArg3=0;
+        if(ReadDword5065(pointers->ContextRecord->Esp,cdeclReturn) &&
+           ReadDword5065(pointers->ContextRecord->Esp+4,cdeclArg1) &&
+           ReadDword5065(pointers->ContextRecord->Esp+8,cdeclArg2) &&
+           ReadDword5065(pointers->ContextRecord->Esp+12,cdeclArg3)) {
+            wsprintfA(state,"crash-stack-top return=0x%08lX possible-cdecl-args=[0x%08lX,0x%08lX,0x%08lX].",
+                cdeclReturn,cdeclArg1,cdeclArg2,cdeclArg3);
+            Flash5065Trace(state);
+        }
         LogExceptionStack5065(pointers->ContextRecord);
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -667,41 +743,46 @@ static DWORD WINAPI Deferred5065ProtocolHooks(LPVOID)
     for (int attempt = 0; attempt < 300; ++attempt) {
         ImportedFunction5065 connectTarget=ResolveMainImport("connect");
         ImportedFunction5065 sendTarget=ResolveMainImport("send");
+        ImportedFunction5065 recvTarget=ResolveMainImport("recv");
         if(attempt==0 || attempt%20==0) {
             LogResolvedFunction("connect",connectTarget);
             LogResolvedFunction("send",sendTarget);
+            LogResolvedFunction("recv",recvTarget);
         }
-        if (connectTarget.address && sendTarget.address) {
+        if (connectTarget.address && sendTarget.address && recvTarget.address) {
             native5065_connect = reinterpret_cast<ConnectProc>(connectTarget.address);
             native5065_send = reinterpret_cast<SendProc>(sendTarget.address);
+            native5065_recv = reinterpret_cast<RecvProc>(recvTarget.address);
             LONG transaction=DetourTransactionBegin();
             LONG update=transaction==NO_ERROR?DetourUpdateThread(GetCurrentThread()):transaction;
             LONG a=update==NO_ERROR?DetourAttach(reinterpret_cast<PVOID*>(&native5065_connect),csv3_connect):update;
             LONG b=a==NO_ERROR?DetourAttach(reinterpret_cast<PVOID*>(&native5065_send),csv3_send):a;
+            LONG c=b==NO_ERROR?DetourAttach(reinterpret_cast<PVOID*>(&native5065_recv),csv3_recv):b;
             char hookLog[256]={};
-            sprintf_s(hookLog,"Detour statuses transaction=%ld updateThread=%ld connect=%ld send=%ld; CRT detour=disabled.",
-                transaction,update,a,b);
+            sprintf_s(hookLog,"Detour statuses transaction=%ld updateThread=%ld connect=%ld send=%ld recv=%ld; CRT detour=disabled.",
+                transaction,update,a,b,c);
             Flash5065Trace(hookLog);
             bool allAttached=transaction==NO_ERROR && update==NO_ERROR &&
-                a==NO_ERROR && b==NO_ERROR;
+                a==NO_ERROR && b==NO_ERROR && c==NO_ERROR;
             LONG committed = allAttached ? DetourTransactionCommit() : DetourTransactionAbort();
             sprintf_s(hookLog,"Protocol DetourTransaction action=%s result=%ld.",
                 allAttached?"commit":"abort",committed);
             Flash5065Trace(hookLog);
             if (allAttached && committed == NO_ERROR) {
-                Flash5065Trace("Redux connect/send hooks installed; global CRT detour is disabled and authentication payloads are pass-through.");
+                Flash5065Trace("Redux connect/send/recv hooks installed; global CRT detour is disabled and authentication payloads are pass-through.");
                 PublishProtocolOutcome(true);
                 return 0;
             }
             native5065_connect = NULL;
             native5065_send = NULL;
+            native5065_recv = NULL;
             Flash5065Trace("ERROR: Detours rejected Redux protocol hooks.");
             PublishProtocolOutcome(false);
             return 1;
         }
         Sleep(50);
     }
-    Flash5065Trace("ERROR: connect or send import from Conquer.exe remained unresolved after 15 seconds.");
+    Flash5065Trace("ERROR: connect, send or recv import from Conquer.exe remained unresolved after 15 seconds.");
     PublishProtocolOutcome(false);
     return 1;
 }
@@ -892,6 +973,8 @@ void csv3_shutdown()
     if(g_protocolFailedEvent){CloseHandle(g_protocolFailedEvent);g_protocolFailedEvent=NULL;}
     AcquireSRWLockExclusive(&g_authObserverLock);
     if(g_authObserver5065){delete g_authObserver5065;g_authObserver5065=NULL;}
+    if(g_authInboundObserver5065){delete g_authInboundObserver5065;g_authInboundObserver5065=NULL;}
+    g_authInboundPendingLength5065=0;
     ReleaseSRWLockExclusive(&g_authObserverLock);
     g_loginSocket=INVALID_SOCKET; g_gameSocket=INVALID_SOCKET;
     SecureZeroMemory(szPassword,sizeof(szPassword));

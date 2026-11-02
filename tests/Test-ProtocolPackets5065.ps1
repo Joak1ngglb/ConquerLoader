@@ -46,4 +46,22 @@ for($i=0;$i -lt 52;$i++){
 }
 Assert ((Hex $decrypted) -eq (Hex $original)) 'Auth transport round-trip changed AccountEx bytes.'
 Assert ((Hex ($decrypted[20..35])) -eq (Hex ($original[20..35]))) 'Opaque RC5 password block was modified.'
+
+# Server-to-client uses the inverse direction. Redux Encrypt applies AB/swap/key;
+# CLegacyCipher::Encrypt reverses it on the observer's private copy.
+$response=[byte[]](32,0,31,4)
+$serverWire=New-Object byte[] 4
+$clientObserved=New-Object byte[] 4
+for($i=0;$i -lt 4;$i++){
+    $b=$response[$i] -bxor 0xAB
+    $b=(($b -shr 4) -bor (($b -shl 4)-band 255))
+    $serverWire[$i]=[byte]($b -bxor $iv[$i] -bxor $iv[256])
+}
+for($i=0;$i -lt 4;$i++){
+    $b=$serverWire[$i] -bxor $iv[$i] -bxor $iv[256]
+    $b=(($b -shr 4) -bor (($b -shl 4)-band 255))
+    $clientObserved[$i]=[byte]($b -bxor 0xAB)
+}
+Assert ((Hex $clientObserved) -eq (Hex $response)) 'Server-to-client 1055 observer direction is wrong.'
+Assert ($hook.Contains('g_authInboundObserver5065->Encrypt(observed,result)')) 'Inbound observer must use the inverse auth direction.'
 Write-Host 'OK: Redux 52-byte AccountEx layout, 28-byte MsgConnect metadata and auth cipher vectors verified without credentials.'

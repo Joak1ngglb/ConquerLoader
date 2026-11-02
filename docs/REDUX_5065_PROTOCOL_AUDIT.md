@@ -77,6 +77,26 @@ viajando dentro del paquete 1051 original, pero Redux autentica la cuenta sin
 usar ese nombre como destino de red.
 
 La captura del Build 57 confirma que el cliente usa este flujo multirreino. No
-se reemplaza ni se modifica el SWF. El nuevo observador permitirá confirmar en
-la siguiente ejecución si el segundo paquete de 28 bytes es el suplementario
-1100; hasta disponer de ese log no se lo identifica por su longitud solamente.
+se reemplaza ni se modifica el SWF. El tipo del segundo paquete no se dedujo
+por su longitud: fue confirmado posteriormente por el observador del Build 59.
+
+## Evidencia del Build 59
+
+El observador confirmó que el segundo envío es `28:1052` (`MsgConnect`), no
+1100. En el instante del envío, `getpeername` todavía devuelve
+`127.0.0.1:9958`: el mensaje de entrada al juego está saliendo por la conexión
+de cuentas en vez de una conexión nueva a `:5816`.
+
+El `Conquer.exe` exacto, SHA-256
+`97CCC3276D46D46BB91AD62E758D1FB622C036F6224EED5EA7C121A80E550A89`, estuvo
+disponible para desensamblado. `0x004BB9D8` es el retorno de un `memcpy` dentro
+del lector de paquetes de la clase de red: copia desde su buffer circular de
+64 KiB al buffer local del despachador `0x004BA05D`, llamado desde
+`0x0046A7D3`. Por lo tanto, la infracción es una copia de recepción; no es el
+trampoline de `send` ni una llamada recursiva a CRT.
+
+El siguiente diagnóstico observa también `recv` sin modificarlo. Descifra una
+copia con el contador independiente servidor→cliente y registra exclusivamente
+el encabezado 1055, su resultado y el endpoint IP:puerto recibido; el token y
+las credenciales se omiten. La traza de excepción agrega registros, dirección
+exacta de lectura/escritura y los tres posibles argumentos cdecl de `memcpy`.

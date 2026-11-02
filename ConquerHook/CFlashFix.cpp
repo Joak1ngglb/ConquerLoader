@@ -11,6 +11,7 @@
 #include <cstdarg>
 #include <cstdio>
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "version.lib")
 
@@ -18,10 +19,14 @@ CFlashFix::HookLoadLibrary CFlashFix::pLoadLibrary = NULL;
 CFlashFix::HookCoCreateInstance CFlashFix::pCoCreateInstance = NULL;
 CFlashFix::HookCoGetClassObject CFlashFix::pCoGetClassObject = NULL;
 CFlashFix::HookCLSIDFromProgID CFlashFix::pCLSIDFromProgID = NULL;
+CFlashFix::HookLoadRegTypeLib CFlashFix::pLoadRegTypeLib = NULL;
+CFlashFix::HookQueryPathOfRegTypeLib CFlashFix::pQueryPathOfRegTypeLib = NULL;
 
 namespace {
 const CLSID kShockwaveFlash =
     {0xd27cdb6e,0xae6d,0x11cf,{0x96,0xb8,0x44,0x45,0x53,0x54,0x00,0x00}};
+const GUID kShockwaveFlashTypeLib =
+    {0xd27cdb6b,0xae6d,0x11cf,{0x96,0xb8,0x44,0x45,0x53,0x54,0x00,0x00}};
 HMODULE g_localFlash = NULL;
 SRWLOCK g_flashLock = SRWLOCK_INIT;
 volatile LONG g_hookState = 0;
@@ -33,6 +38,7 @@ __declspec(thread) bool g_insideLocalLoad = false;
 // This referenced import guarantees that ole32.dll is loaded before
 // CLHook.dll receives PROCESS_ATTACH during the early APC.
 CFlashFix::HookCoCreateInstance g_forceOle32Import = &::CoCreateInstance;
+CFlashFix::HookLoadRegTypeLib g_forceOleAut32Import = &::LoadRegTypeLib;
 
 void Trace(const char* format, ...) {
     char message[768]={};
@@ -56,8 +62,13 @@ void Trace(const char* format, ...) {
     CloseHandle(file);
 }
 void TraceHr(const char* operation,HRESULT hr) {
-    Trace("%s => HRESULT=0x%08lX (%s)",operation,static_cast<unsigned long>(hr),
-        SUCCEEDED(hr)?"success":"failure");
+    const char* detail=SUCCEEDED(hr)?"success":"failure";
+    if(hr==TYPE_E_LIBNOTREGISTERED)detail="TYPE_E_LIBNOTREGISTERED";
+    else if(hr==REGDB_E_CLASSNOTREG)detail="REGDB_E_CLASSNOTREG";
+    else if(hr==E_NOINTERFACE)detail="E_NOINTERFACE";
+    else if(hr==CLASS_E_CLASSNOTAVAILABLE)detail="CLASS_E_CLASSNOTAVAILABLE";
+    else if(hr==CLASS_E_NOAGGREGATION)detail="CLASS_E_NOAGGREGATION";
+    Trace("%s => HRESULT=0x%08lX (%s)",operation,static_cast<unsigned long>(hr),detail);
 }
 void GuidText(REFGUID guid,char output[64]) {
     sprintf_s(output,64,"{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
@@ -90,6 +101,9 @@ bool LocalFlashPath(wchar_t output[MAX_PATH]) {
 }
 bool FlashClass(REFCLSID clsid) {
     return IsEqualCLSID(clsid,kShockwaveFlash)!=FALSE;
+}
+bool FlashTypeLibrary(REFGUID libid) {
+    return IsEqualGUID(libid,kShockwaveFlashTypeLib)!=FALSE;
 }
 bool FlashProgID(LPCOLESTR progId) {
     if(!progId)return false;
@@ -180,6 +194,28 @@ HRESULT LocalFlashClassFactory(REFCLSID clsid,REFIID iid,LPVOID* result) {
     TraceHr("Flash.ocx!DllGetClassObject",hr);
     return hr;
 }
+HRESULT LocalFlashTypeLibrary(ITypeLib** result) {
+    if(!result)return E_POINTER;
+    *result=NULL;
+    if(!OpenLocalFlash())return HRESULT_FROM_WIN32(GetLastError()?GetLastError():ERROR_MOD_NOT_FOUND);
+    wchar_t path[MAX_PATH]={};
+    if(!LocalFlashPath(path))return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    HRESULT hr=LoadTypeLibEx(path,REGKIND_NONE,result);
+    TraceHr("LoadTypeLibEx(Flash.ocx, REGKIND_NONE)",hr);
+    if(FAILED(hr) || !*result)return FAILED(hr)?hr:E_UNEXPECTED;
+    TLIBATTR* attributes=NULL;
+    hr=(*result)->GetLibAttr(&attributes);
+    if(SUCCEEDED(hr) && attributes) {
+        char actual[64]={}; GuidText(attributes->guid,actual);
+        Trace("Embedded typelib LIBID=%s version=%u.%u LCID=%lu.",actual,
+            attributes->wMajorVerNum,attributes->wMinorVerNum,attributes->lcid);
+        bool matches=FlashTypeLibrary(attributes->guid);
+        (*result)->ReleaseTLibAttr(attributes);
+        if(!matches)hr=TYPE_E_LIBNOTREGISTERED;
+    }
+    if(FAILED(hr)) { (*result)->Release(); *result=NULL; TraceHr("Embedded Flash typelib validation",hr); }
+    return hr;
+}
 }
 
 const char* CFlashFix::StageName() {
@@ -201,13 +237,14 @@ HRESULT CFlashFix::Hook(bool enableComFallback) {
     if(prior==2)return S_FALSE;
     if(prior!=0)return E_PENDING;
     SetStage(StageInstallingHooks);
-    Trace("Hook begin; COM fallback=%s; forced ole32 import=0x%p.",
-        enableComFallback?"enabled":"disabled",g_forceOle32Import);
+    Trace("Hook begin; COM fallback=%s; forced ole32=0x%p oleaut32=0x%p.",
+        enableComFallback?"enabled":"disabled",g_forceOle32Import,g_forceOleAut32Import);
     HMODULE kernel=GetModuleHandleW(L"kernelbase.dll");
     if(!kernel)kernel=GetModuleHandleW(L"kernel32.dll");
     HMODULE ole=GetModuleHandleW(L"ole32.dll");
-    Trace("Modules: kernel=0x%p ole32=0x%p.",kernel,ole);
-    if(!kernel || (enableComFallback && !ole)) {
+    HMODULE oleaut=GetModuleHandleW(L"oleaut32.dll");
+    Trace("Modules: kernel=0x%p ole32=0x%p oleaut32=0x%p.",kernel,ole,oleaut);
+    if(!kernel || (enableComFallback && (!ole || !oleaut))) {
         Trace("Required module missing; hooks not installed.");
         SetStage(StageFailed); InterlockedExchange(&g_hookState,-1); PublishOutcome(false);
         return HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND);
@@ -217,11 +254,14 @@ HRESULT CFlashFix::Hook(bool enableComFallback) {
         pCoCreateInstance=reinterpret_cast<HookCoCreateInstance>(GetProcAddress(ole,"CoCreateInstance"));
         pCoGetClassObject=reinterpret_cast<HookCoGetClassObject>(GetProcAddress(ole,"CoGetClassObject"));
         pCLSIDFromProgID=reinterpret_cast<HookCLSIDFromProgID>(GetProcAddress(ole,"CLSIDFromProgID"));
+        pLoadRegTypeLib=reinterpret_cast<HookLoadRegTypeLib>(GetProcAddress(oleaut,"LoadRegTypeLib"));
+        pQueryPathOfRegTypeLib=reinterpret_cast<HookQueryPathOfRegTypeLib>(GetProcAddress(oleaut,"QueryPathOfRegTypeLib"));
     }
-    Trace("Exports: LoadLibraryExW=0x%p CoCreateInstance=0x%p CoGetClassObject=0x%p CLSIDFromProgID=0x%p.",
-        pLoadLibrary,pCoCreateInstance,pCoGetClassObject,pCLSIDFromProgID);
+    Trace("Exports: LoadLibraryExW=0x%p CoCreateInstance=0x%p CoGetClassObject=0x%p CLSIDFromProgID=0x%p LoadRegTypeLib=0x%p QueryPathOfRegTypeLib=0x%p.",
+        pLoadLibrary,pCoCreateInstance,pCoGetClassObject,pCLSIDFromProgID,pLoadRegTypeLib,pQueryPathOfRegTypeLib);
     if(!pLoadLibrary || (enableComFallback &&
-       (!pCoCreateInstance || !pCoGetClassObject || !pCLSIDFromProgID))) {
+       (!pCoCreateInstance || !pCoGetClassObject || !pCLSIDFromProgID ||
+        !pLoadRegTypeLib || !pQueryPathOfRegTypeLib))) {
         SetStage(StageFailed); InterlockedExchange(&g_hookState,-1); PublishOutcome(false);
         return HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
     }
@@ -234,6 +274,10 @@ HRESULT CFlashFix::Hook(bool enableComFallback) {
         status=DetourAttach(reinterpret_cast<PVOID*>(&pCoGetClassObject),CoGetClassObjectDetour);
     if(status==NO_ERROR && pCLSIDFromProgID)
         status=DetourAttach(reinterpret_cast<PVOID*>(&pCLSIDFromProgID),CLSIDFromProgIDDetour);
+    if(status==NO_ERROR && pLoadRegTypeLib)
+        status=DetourAttach(reinterpret_cast<PVOID*>(&pLoadRegTypeLib),LoadRegTypeLibDetour);
+    if(status==NO_ERROR && pQueryPathOfRegTypeLib)
+        status=DetourAttach(reinterpret_cast<PVOID*>(&pQueryPathOfRegTypeLib),QueryPathOfRegTypeLibDetour);
     if(status==NO_ERROR)status=DetourTransactionCommit();
     else DetourTransactionAbort();
     if(status!=NO_ERROR) {
@@ -242,7 +286,7 @@ HRESULT CFlashFix::Hook(bool enableComFallback) {
         return HRESULT_FROM_WIN32(status);
     }
     InterlockedExchange(&g_hookState,2); SetStage(StageHooksActive);
-    Trace("LoadLibraryExW and COM activation hooks committed atomically.");
+    Trace("LoadLibraryExW, COM activation and typelib hooks committed atomically.");
     return S_OK;
 }
 
@@ -252,8 +296,11 @@ HRESULT CFlashFix::PreflightLocalControl() {
     HRESULT com=CoInitializeEx(NULL,COINIT_APARTMENTTHREADED);
     TraceHr("CoInitializeEx(COINIT_APARTMENTTHREADED)",com);
     bool uninitialize=SUCCEEDED(com);
+    ITypeLib* typeLibrary=NULL;
+    HRESULT hr=LocalFlashTypeLibrary(&typeLibrary);
+    if(typeLibrary)typeLibrary->Release();
     IClassFactory* factory=NULL;
-    HRESULT hr=LocalFlashClassFactory(kShockwaveFlash,IID_IClassFactory,
+    if(SUCCEEDED(hr))hr=LocalFlashClassFactory(kShockwaveFlash,IID_IClassFactory,
         reinterpret_cast<void**>(&factory));
     if(SUCCEEDED(hr) && !factory)hr=E_UNEXPECTED;
     IUnknown* instance=NULL;
@@ -331,4 +378,29 @@ HRESULT WINAPI CFlashFix::CLSIDFromProgIDDetour(LPCOLESTR progId,LPCLSID clsid) 
         return S_OK;
     }
     return pCLSIDFromProgID(progId,clsid);
+}
+
+HRESULT WINAPI CFlashFix::LoadRegTypeLibDetour(REFGUID libid,WORD major,WORD minor,
+    LCID lcid,ITypeLib** result) {
+    if(FlashTypeLibrary(libid)) {
+        Trace("LoadRegTypeLib intercepted for ShockwaveFlash version=%u.%u LCID=%lu.",major,minor,lcid);
+        return LocalFlashTypeLibrary(result);
+    }
+    return pLoadRegTypeLib(libid,major,minor,lcid,result);
+}
+
+HRESULT WINAPI CFlashFix::QueryPathOfRegTypeLibDetour(REFGUID libid,USHORT major,
+    USHORT minor,LCID lcid,LPBSTR path) {
+    if(FlashTypeLibrary(libid)) {
+        if(!path)return E_POINTER;
+        *path=NULL;
+        wchar_t local[MAX_PATH]={};
+        if(!LocalFlashPath(local))return TYPE_E_LIBNOTREGISTERED;
+        *path=SysAllocString(local);
+        HRESULT hr=*path?S_OK:E_OUTOFMEMORY;
+        Trace("QueryPathOfRegTypeLib intercepted for ShockwaveFlash version=%u.%u LCID=%lu.",major,minor,lcid);
+        TraceHr("QueryPathOfRegTypeLib local result",hr);
+        return hr;
+    }
+    return pQueryPathOfRegTypeLib(libid,major,minor,lcid,path);
 }

@@ -10,6 +10,8 @@ public:
     typedef HRESULT (WINAPI* HookCoCreateInstance)(REFCLSID,LPUNKNOWN,DWORD,REFIID,LPVOID*);
     typedef HRESULT (WINAPI* HookCoGetClassObject)(REFCLSID,DWORD,COSERVERINFO*,REFIID,LPVOID*);
     typedef HRESULT (WINAPI* HookCLSIDFromProgID)(LPCOLESTR,LPCLSID);
+    typedef HRESULT (WINAPI* HookLoadRegTypeLib)(REFGUID,WORD,WORD,LCID,ITypeLib**);
+    typedef HRESULT (WINAPI* HookQueryPathOfRegTypeLib)(REFGUID,USHORT,USHORT,LCID,LPBSTR);
     enum ActivationStage {
         StageNotStarted=0,StageInstallingHooks,StageHooksActive,StagePreflight,
         StageLoadingOcx,StageClassFactory,StageCreateInstance,StageReady,StageFailed
@@ -19,6 +21,8 @@ public:
     static HookCoCreateInstance pCoCreateInstance;
     static HookCoGetClassObject pCoGetClassObject;
     static HookCLSIDFromProgID pCLSIDFromProgID;
+    static HookLoadRegTypeLib pLoadRegTypeLib;
+    static HookQueryPathOfRegTypeLib pQueryPathOfRegTypeLib;
 
     static HRESULT Hook(bool enableComFallback=true);
     static HRESULT PreflightLocalControl();
@@ -28,4 +32,6 @@ public:
     static HRESULT WINAPI CoCreateInstanceDetour(REFCLSID,LPUNKNOWN,DWORD,REFIID,LPVOID*);
     static HRESULT WINAPI CoGetClassObjectDetour(REFCLSID,DWORD,COSERVERINFO*,REFIID,LPVOID*);
     static HRESULT WINAPI CLSIDFromProgIDDetour(LPCOLESTR,LPCLSID);
+    static HRESULT WINAPI LoadRegTypeLibDetour(REFGUID,WORD,WORD,LCID,ITypeLib**);
+    static HRESULT WINAPI QueryPathOfRegTypeLibDetour(REFGUID,USHORT,USHORT,LCID,LPBSTR);
 };

@@ -32,8 +32,9 @@ if($hookLines.Count -eq 0){
     Write-Host ('Last HRESULT: ' + $(if($lastHr){$lastHr}else{'not recorded'}))
     Write-Host ('Last exception: ' + $(if($lastException){$lastException}else{'not recorded'}))
     foreach($required in @(
-        'LoadLibraryExW and COM activation hooks committed atomically.',
+        'LoadLibraryExW, COM activation and typelib hooks committed atomically.',
         'Flash.ocx loaded at',
+        'LoadTypeLibEx(Flash.ocx, REGKIND_NONE)',
         'Preflight complete: local ShockwaveFlash ActiveX instance created.'
     )){
         Write-Host ("Checkpoint '$required': " + [bool]($hookLines -match [regex]::Escape($required)))

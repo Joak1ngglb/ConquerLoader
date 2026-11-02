@@ -335,6 +335,12 @@ hash, PE y bytes originales y cambia únicamente ese retorno **en memoria**.
 No altera `Conquer.exe` en disco ni reemplaza la interfaz SWF. El handshake
 solo publica `Ready` después de crear y liberar una instancia ActiveX real.
 
+Si Windows muestra «Biblioteca no registrada» (`TYPE_E_LIBNOTREGISTERED`), el
+CLSID ya fue resuelto pero falta la type library ShockwaveFlash. CLHook también
+redirige `LoadRegTypeLib` y `QueryPathOfRegTypeLib` para el LIBID
+`{D27CDB6B-AE6D-11CF-96B8-444553540000}` y usa `LoadTypeLibEx` con
+`REGKIND_NONE`; no escribe esa typelib en el registro global.
+
 
 ## Crash aislado por etapas — ExitCode 0xC0000005
 
